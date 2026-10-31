@@ -9,7 +9,8 @@
  * The snap Chromium cannot read /tmp, so write the HTML under $HOME.
  * CARD_THEME=light renders the light palette, CARD_WRAP_WIDTH the card width
  * (380 is a phone, 500 a dashboard column), CARD_EDIT=<rangeId> the editor.
- * CARD_PANE=settings or backups opens that pane.
+ * CARD_PANE=settings or backups opens that pane, and CARD_DEVICE=<serial or
+ * name> pins the card to one FP2.
  * CARD_LIVE=1 draws sample live dots (a person in each detection zone and one
  * interference source), or CARD_LIVE='<json list of targets>' those targets.
  */
@@ -64,7 +65,9 @@ const THEME = dark ? `
 
 const card = new Card();
 document.body.appendChild(card);
-card.setConfig({ type: 'custom:fp2-companion-card' });
+/* CARD_DEVICE pins the card to one FP2, which also hides the device picker. */
+card.setConfig({ type: 'custom:fp2-companion-card',
+  ...(process.env.CARD_DEVICE ? { device: process.env.CARD_DEVICE } : {}) });
 card.hass = { states, callService: () => {} };
 /* CARD_EDIT=<rangeId> opens the editor on that zone, since a render cannot
  * press anything. */

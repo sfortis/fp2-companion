@@ -11,6 +11,11 @@ Lovelace card that make those settings available in Home Assistant through
 the same cloud API the Aqara app uses. Presence keeps flowing over HomeKit
 and does not depend on the cloud.
 
+<p align="center">
+  <img src="docs/images/zones.png" width="380" alt="The Zones tab: the zone map with live targets and the zone list">
+  <img src="docs/images/settings.png" width="380" alt="The Settings tab: AI person detection, AI learning, sensitivity and approach distance">
+</p>
+
 > **Unofficial.** This project is not affiliated with Aqara or Lumi. It uses
 > a private API that Aqara does not document or support, and that can change
 > or stop working at any time. Use it at your own risk.
@@ -48,10 +53,28 @@ and does not depend on the cloud.
 
 ### 1. The app
 
-Copy `apps/fp2_companion/` into AppDaemon's apps folder, so that it ends up as
-`/config/apps/fp2_companion/` inside the add-on (on Home Assistant OS that is
-`/addon_configs/a0d7b954_appdaemon/apps/fp2_companion/`). The app's settings are
-in `fp2_companion.yaml` beside it, and the defaults suit most homes.
+**With HACS.** In HACS, open the integration's options and turn on
+**Enable AppDaemon apps discovery & tracking**. Then add
+`https://github.com/sfortis/fp2-companion` as a custom repository of the
+type **AppDaemon** and download FP2 Companion. HACS puts the app under
+`appdaemon/apps/` in Home Assistant's configuration folder, while the
+AppDaemon add-on on Home Assistant OS reads its apps from its own folder by
+default. Point the add-on at the HACS folder in its `appdaemon.yaml`:
+
+```yaml
+appdaemon:
+  app_dir: /homeassistant/appdaemon/apps
+```
+
+That setting moves the apps folder for every app, so move any apps you
+already have into it as well.
+
+**By hand.** Copy `apps/fp2_companion/` into AppDaemon's apps folder. On
+Home Assistant OS that is `/addon_configs/a0d7b954_appdaemon/apps/`.
+
+The app's settings are in `fp2_companion.yaml` beside it, and the defaults
+suit most homes. HACS installs and updates the app only; the card is
+installed by hand, in step 4.
 
 ### 2. The app identity (usually nothing to do)
 

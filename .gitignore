@@ -13,3 +13,4 @@ scripts/deploy.env
 # Render output from card/test/fp2-companion-render.js.
 *.html
 *.png
+!docs/images/*.png
