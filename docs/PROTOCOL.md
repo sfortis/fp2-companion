@@ -112,8 +112,9 @@ progress in any resource, so the card counts down on its own.
 ## Zones
 
 `GET devex/radar/range/list?deviceId=<did>` returns the zones. A zone has a
-`rangeId`, a `name`, a `regionType` (0 detection, 1 interference), a
-`sensitivity`, a `tagId` and `tagName`, a `colorId` and a `blockList`.
+`rangeId`, a `name`, a `regionType` (0 detection, 1 interference, 3 the
+room's edge), a `sensitivity`, a `tagId` and `tagName`, a `colorId` and a
+`blockList`.
 
 The map is a grid of 16 columns and 20 rows. Block ids run from 1 to 320 in
 row-major order, so a block id is `row * 16 + column + 1` with both counted
@@ -125,6 +126,12 @@ its `rangeId`. Without a `rangeId` it creates a zone, and the server assigns
 the next free id and turns an empty `tagId` into `custom_Other`.
 `POST devex/radar/range/del` with `{"deviceId", "rangeIdList": [...]}`
 deletes zones. A `range/set` with an empty `blockList` is not a delete.
+
+A zone of `regionType` 3 marks the room's edge. It holds every block
+OUTSIDE the room, where the FP2 does not look. On 2026-10-31 one FP2 had a
+zone named "Edge" with `rangeId` 103 covering 288 of the 320 blocks; the 32
+it left out formed a 4 by 8 room that held that FP2's other zones. No write
+of it was captured, so FP2 Companion shows it and never writes it.
 
 A zone's type is a tag. The Aqara app fills its type list from
 `GET app/tag/bottom/list?tagType=9`. On 2026-10-31 that returned 30 tags,

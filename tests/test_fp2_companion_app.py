@@ -527,6 +527,18 @@ def test_a_create_as_other_is_sent_like_the_official_app(fp2):
     assert sent["tagId"] == "" and sent["tagName"] == "Other"
 
 
+def test_the_room_edge_is_never_written(fp2):
+    """regionType 3, the space outside the room, was never captured being
+    written by the Aqara app, so the app refuses it (owner, 2026-10-31)."""
+    app, world = fp2()
+    edge = zone(103, "Edge", 3, 1, [1, 2, 3])
+    app.cloud_fake.zones.append(edge)
+    app.start()
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "blockList": [1, 2]}))
+    assert app.cloud_fake.zone_writes == []
+    assert status(world) == "refused"
+
+
 def test_the_interference_zone_can_be_redrawn(fp2):
     app, world = fp2()
     app.start()

@@ -418,6 +418,43 @@ function typePick(root) {
   eq(sent.sensitivity, 3, 'and that type\'s sensitivity');
 }
 
+/* ---------- the room's edge ---------- */
+/* The Mancave FP2 of 2026-10-31: the edge is every block outside a 4 by 8
+ * room (columns 6 to 9, rows 0 to 7), and the Desk sits inside the room. */
+{
+  const room = new Set();
+  for (let r = 0; r < 8; r += 1) for (let c = 6; c < 10; c += 1) room.add(r * 16 + c + 1);
+  const outside = [];
+  for (let b = 1; b <= 320; b += 1) if (!room.has(b)) outside.push(b);
+  const zones = [
+    { rangeId: 1, name: 'Desk', regionType: 0, sensitivity: 1, tagId: '3.3',
+      tagName: 'Desk', blockList: [23, 24, 39, 40] },
+    { rangeId: 103, name: 'Edge', regionType: 3, sensitivity: 1, tagId: 'custom_',
+      tagName: '', colorId: 5, blockList: outside },
+  ];
+  const { root } = mount(typedStates(zones));
+  const svg = root.querySelector('svg.map');
+  const cells = [...svg.querySelectorAll('rect.cell')];
+  eq(cells.length, 292, 'the edge and the desk are drawn');
+  eq(cells[0].getAttribute('fill'), 'var(--disabled-text-color, #9e9e9e)',
+    'the edge is drawn first, in grey');
+  eq(cells[cells.length - 1].getAttribute('fill'), '#42a5f5',
+    'the desk is drawn over it in its own colour');
+  eq(root.querySelectorAll('svg.map rect.overlap').length, 0,
+    'the edge does not count as an overlap');
+  eq([...svg.querySelectorAll('text.label')].map((l) => l.textContent).join(','), 'Desk',
+    'only the detection zone is labelled');
+  const rows = [...root.querySelectorAll('.legend .row:not(.head)')];
+  const edgeRow = rows.find((r) => r.querySelector('.nm').textContent === 'Edge');
+  eq(edgeRow.querySelector('.type').textContent, 'Edge', 'the legend names the edge');
+  eq(edgeRow.querySelector('.sens').textContent, '', 'with no sensitivity');
+  ok(!edgeRow.querySelector('.badge'), 'and no Edit button');
+  eq(edgeRow.children.length, rows[0].children.length, 'its row keeps the columns');
+  root.querySelector('.sect .cap button').click();            // New zone
+  eq(root.querySelector('.editor input').value, 'Detection Zone 2',
+    'the edge is not counted in a new zone\'s name');
+}
+
 /* ---------- previewing and restoring a backup ---------- */
 {
   const st = states();

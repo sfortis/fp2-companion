@@ -7,7 +7,8 @@
  *
  *   1. is the cloud link working
  *   2. how sensitive is it, and from how far does it react
- *   3. where are the zones (the map, with the interference zone hatched)
+ *   3. where are the zones (the map, with the interference zone hatched and
+ *      the space outside the room's edge in grey)
  *   4. which backups of the zones exist, and put one back
  *
  * Everything comes from the app's own entities. The settings are changed
@@ -44,7 +45,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.12.0';
+const CARD_VERSION = '1.13.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -122,6 +123,7 @@ const DEFAULTS = {
     },
     interference: 'Interference',
     detection: 'Detection',
+    edge: 'Edge',
     type: 'Type',
     type_other: 'Other',
     overlap: 'Blocks in more than one zone: {n}',
@@ -207,7 +209,15 @@ const ZONE_COLOURS = ['#42a5f5', '#ffa726', '#66bb6a', '#ab47bc', '#ef5350',
   '#26c6da', '#d4e157', '#8d6e63', '#ec407a', '#7e57c2'];
 const NEW_ZONE_COLOUR = '#ffee58';
 
+const REGION_DETECTION = 0;
 const REGION_INTERFERENCE = 1;
+/* The room's edge: every block OUTSIDE the room, where the FP2 does not look.
+ * Read off the live Mancave FP2 on 2026-10-31, whose zone "Edge" covers 288
+ * of 320 blocks and leaves out the 4 by 8 room that holds its other zones.
+ * It is shown grey and never edited, because no write of it was captured
+ * from the Aqara app (owner, 2026-10-31). */
+const REGION_EDGE = 3;
+const EDGE_COLOUR = 'var(--disabled-text-color, #9e9e9e)';
 /* The type of a zone with none, as the server names it (zone_model.TAG_OTHER_ID). */
 const TAG_OTHER = 'custom_Other';
 const DEFAULT_GRID = { columns: 16, rows: 20 };
@@ -555,7 +565,13 @@ function legendHeader(text) {
  * Interference for the interference zone, which has none. */
 function zoneType(zone, text) {
   if (zone.regionType === REGION_INTERFERENCE) return text.interference;
+  if (zone.regionType === REGION_EDGE) return text.edge;
   return zone.tagName || text.detection;
+}
+
+/* Only a detection zone has a sensitivity worth showing. */
+function zoneSensitivity(zone) {
+  return zone.regionType === REGION_DETECTION ? (SENSITIVITY[zone.sensitivity] || '') : '';
 }
 
 /* Block id to cell, both from 0. The same arithmetic as zone_model.cell(). */
@@ -1561,26 +1577,27 @@ class Fp2CompanionCard extends HTMLElement {
       const sw = el('div', 'sw');
       sw.style.background = colours.get(z.rangeId);
       row.appendChild(sw);
-      const interference = z.regionType === REGION_INTERFERENCE;
       row.appendChild(el('div', 'nm', z.name));
       /* The zone's type, which the Aqara app calls its area type, and its
        * sensitivity; the block count meant nothing to anyone (owner,
        * 2026-10-30). */
       row.appendChild(el('div', 'meta type', zoneType(z, t)));
-      row.appendChild(el('div', 'meta sens',
-        interference ? '' : (SENSITIVITY[z.sensitivity] || '')));
+      row.appendChild(el('div', 'meta sens', zoneSensitivity(z)));
       /* Editing has its own button, so a press on the row only picks the zone
        * out on the map and can never start an edit by accident. While one
        * zone is being edited the other badges are hidden, because switching
        * would throw the draft away. */
-      if (this._edit !== null) row.appendChild(el('div', ''));
+      const editable = z.regionType !== REGION_EDGE;
+      if (this._edit !== null || !editable) row.appendChild(el('div', ''));
       if (this._edit === null) {
-        const badge = el('button', 'badge', t.edit);
-        badge.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          this._startEdit(z);
-        });
-        row.appendChild(badge);
+        if (editable) {
+          const badge = el('button', 'badge', t.edit);
+          badge.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            this._startEdit(z);
+          });
+          row.appendChild(badge);
+        }
         row.addEventListener('click', () => {
           this._focus = this._focus === z.rangeId ? null : z.rangeId;
           this._updateZones();
@@ -1602,6 +1619,8 @@ class Fp2CompanionCard extends HTMLElement {
     zones.forEach((z) => {
       if (z.regionType === REGION_INTERFERENCE) {
         colours.set(z.rangeId, 'var(--secondary-text-color)');
+      } else if (z.regionType === REGION_EDGE) {
+        colours.set(z.rangeId, EDGE_COLOUR);
       } else {
         colours.set(z.rangeId, ZONE_COLOURS[i % ZONE_COLOURS.length]);
         i += 1;
@@ -1610,9 +1629,12 @@ class Fp2CompanionCard extends HTMLElement {
     return colours;
   }
 
+  /* The edge is left out: it is the space around the room, not a zone that
+   * can share a block with one. */
   _overlaps(zones) {
     const owners = new Map();
-    zones.forEach((z) => (z.blockList || []).forEach((b) => {
+    zones.filter((z) => z.regionType !== REGION_EDGE)
+      .forEach((z) => (z.blockList || []).forEach((b) => {
       owners.set(b, (owners.get(b) || 0) + 1);
     }));
     return new Set([...owners].filter(([, n]) => n > 1).map(([b]) => b));
@@ -1644,12 +1666,14 @@ class Fp2CompanionCard extends HTMLElement {
     defs.appendChild(hatch);
     svg.appendChild(defs);
 
-    /* Interference first, so detection zones are drawn over it. */
-    const ordered = zones.slice().sort((a, b) => (
-      (b.regionType === REGION_INTERFERENCE) - (a.regionType === REGION_INTERFERENCE)));
+    /* The edge first, then interference, so detection zones are drawn over
+     * both. */
+    const layer = (z) => ({ [REGION_EDGE]: 0, [REGION_INTERFERENCE]: 1 })[z.regionType] ?? 2;
+    const ordered = zones.slice().sort((a, b) => layer(a) - layer(b));
     ordered.forEach((z) => {
       if (edit && edit.rangeId === z.rangeId) return;
       const interference = z.regionType === REGION_INTERFERENCE;
+      const edge = z.regionType === REGION_EDGE;
       const dim = Boolean(edit) || (focus !== null && focus !== z.rangeId);
       const group = svgEl('g', {});
       (z.blockList || []).forEach((b) => {
@@ -1659,7 +1683,7 @@ class Fp2CompanionCard extends HTMLElement {
           class: `cell${dim ? ' dim' : ''}`, x: col * CELL, y: row * CELL,
           width: CELL, height: CELL,
           fill: interference ? 'url(#hatch)' : colours.get(z.rangeId),
-          'fill-opacity': interference ? 1 : 0.55,
+          'fill-opacity': interference ? 1 : (edge ? 0.35 : 0.55),
         }));
       });
       svg.appendChild(group);
@@ -1683,7 +1707,7 @@ class Fp2CompanionCard extends HTMLElement {
     });
 
     /* A detection zone's name sits at the middle of its blocks. */
-    zones.filter((z) => z.regionType !== REGION_INTERFERENCE).forEach((z) => {
+    zones.filter((z) => z.regionType === REGION_DETECTION).forEach((z) => {
       const cells = (z.blockList || []).map((b) => blockCell(b, cols));
       if (!cells.length) return;
       const cx = cells.reduce((s, c) => s + c.col, 0) / cells.length;
@@ -1771,8 +1795,8 @@ class Fp2CompanionCard extends HTMLElement {
         name: zone.name, sensitivity: zone.sensitivity, tagId: zone.tagId,
         blocks: (zone.blockList || []).slice(), original: zone };
     } else {
-      const n = zones.filter((z) => z.regionType !== REGION_INTERFERENCE).length + 1;
-      this._edit = { rangeId: null, regionType: 0, tagId: TAG_OTHER,
+      const n = zones.filter((z) => z.regionType === REGION_DETECTION).length + 1;
+      this._edit = { rangeId: null, regionType: REGION_DETECTION, tagId: TAG_OTHER,
         name: tpl(t.new_zone_name, { n }), sensitivity: 1, blocks: [], original: null };
     }
     this._preview = null;
@@ -1820,7 +1844,7 @@ class Fp2CompanionCard extends HTMLElement {
     nameRow.appendChild(name);
     r.editor.appendChild(nameRow);
 
-    if (e.regionType === 0) r.editor.appendChild(this._typeField());
+    if (e.regionType === REGION_DETECTION) r.editor.appendChild(this._typeField());
 
     if (!interference) {
       const sensRow = el('div', 'field');
@@ -1920,7 +1944,7 @@ class Fp2CompanionCard extends HTMLElement {
     if (!e || this._saveBtn.disabled) return;
     const payload = { name: e.name.trim(), blockList: e.blocks.slice() };
     if (e.regionType !== REGION_INTERFERENCE) payload.sensitivity = e.sensitivity;
-    if (e.regionType === 0 && e.tagId) payload.tagId = e.tagId;
+    if (e.regionType === REGION_DETECTION && e.tagId) payload.tagId = e.tagId;
     if (e.rangeId !== null) payload.rangeId = e.rangeId;
     this._command('zone_set', payload);
     this._sent();
@@ -1997,8 +2021,7 @@ class Fp2CompanionCard extends HTMLElement {
       row.appendChild(sw);
       row.appendChild(el('div', 'nm', z.name));
       row.appendChild(el('div', 'meta type', zoneType(z, t)));
-      row.appendChild(el('div', 'meta sens', z.regionType === REGION_INTERFERENCE
-        ? '' : (SENSITIVITY[z.sensitivity] || '')));
+      row.appendChild(el('div', 'meta sens', zoneSensitivity(z)));
       row.appendChild(el('div', ''));
       r.legend.appendChild(row);
     });
