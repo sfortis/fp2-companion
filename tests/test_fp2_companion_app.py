@@ -1018,6 +1018,16 @@ def test_rescans_while_nothing_is_found_keep_one_retry(fp2):
     assert world.cancelled == retries[:-1]
 
 
+def test_a_retry_that_fires_cancels_its_own_handle_silently(fp2):
+    """AppDaemon removes a one-shot timer before its callback runs, so the
+    retry's own handle is gone by the time start() cancels it."""
+    app, world = fp2(devices=[])
+    app.start()
+    retry = world.timers[-1]
+    retry["callback"](retry["kwargs"])
+    assert world.silent_cancels == [True]
+
+
 def test_a_token_refresh_republishes_the_hub(fp2):
     app, world = fp2()
     app.start()

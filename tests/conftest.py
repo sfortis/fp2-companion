@@ -72,9 +72,11 @@ class World:
                            "callback": callback})
         return handle
 
-    def cancel_timer(self, handle):
+    def cancel_timer(self, handle, silent=False):
         self.cancelled = getattr(self, "cancelled", [])
         self.cancelled.append(handle)
+        self.silent_cancels = getattr(self, "silent_cancels", [])
+        self.silent_cancels.append(silent)
 
     def run_in(self, callback=None, delay=None, *a, **k):
         """Timers are never fired; a test calls the callback itself."""

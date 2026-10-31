@@ -812,7 +812,10 @@ class Fp2Companion(hass.Hass):
         at most one retry pending: a rescan pressed while nothing is found
         replaces the waiting retry instead of starting a second loop."""
         if self._retry is not None:
-            self.cancel_timer(self._retry)
+            # When the retry itself called this, AppDaemon has already taken
+            # its handle off the schedule, and a plain cancel_timer logs
+            # "Invalid callback handle" (reported in PR #1).
+            self.cancel_timer(self._retry, silent=True)
             self._retry = None
         known = set(self.devices)
         found = self.discover()
