@@ -59,15 +59,18 @@ and does not depend on the cloud.
 type **AppDaemon** and download FP2 Companion. HACS puts the app under
 `appdaemon/apps/` in Home Assistant's configuration folder, while the
 AppDaemon add-on on Home Assistant OS reads its apps from its own folder by
-default. Point the add-on at the HACS folder in its `appdaemon.yaml`:
+default. Once the download has created that folder, point the add-on at it
+in its `appdaemon.yaml` (`/addon_configs/a0d7b954_appdaemon/appdaemon.yaml`)
+and restart the add-on:
 
 ```yaml
 appdaemon:
   app_dir: /homeassistant/appdaemon/apps
 ```
 
-That setting moves the apps folder for every app, so move any apps you
-already have into it as well.
+Set it only after the download: the add-on may not start while the folder
+does not exist yet. The setting moves the apps folder for every app, so move
+any apps you already have into it as well.
 
 **By hand.** Copy `apps/fp2_companion/` into AppDaemon's apps folder. On
 Home Assistant OS that is `/addon_configs/a0d7b954_appdaemon/apps/`.
