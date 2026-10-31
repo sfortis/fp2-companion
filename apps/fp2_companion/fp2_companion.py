@@ -37,8 +37,8 @@ from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
 from live_track import LiveTracker
 from regions import COUNTRIES
 from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
-                        ERR_RANGE_ID, LOCKED_REGIONS, REGION_DETECTION,
-                        REGION_EDGE, ROWS,
+                        ERR_ENTRANCE_LOCKED, ERR_RANGE_ID, LOCKED_REGIONS,
+                        REGION_DETECTION, REGION_EDGE, REGION_ENTRANCE, ROWS,
                         TAG_OTHER_ID, TAG_TYPE_ZONE, ZoneError, apply_tag,
                         created_zone, list_backups, new_zone, parse_tags,
                         plan_restore,
@@ -426,6 +426,11 @@ class Fp2Device:
                         if z.get("rangeId") == request.get("rangeId")), None)
         if current is None:
             raise ZoneError(ERR_RANGE_ID, f"no zone {request.get('rangeId')}")
+        if current.get("regionType") == REGION_ENTRANCE:
+            # No write of an entrance zone was captured (PR #1, 2026-10-31).
+            raise ZoneError(ERR_ENTRANCE_LOCKED,
+                            f"{current.get('name')} is an entrance zone, "
+                            "which is not written")
         zone = dict(current)
         if current.get("regionType") == REGION_EDGE:
             # The Aqara app redraws the edge and changes nothing else on it
@@ -483,6 +488,7 @@ class Fp2Device:
         them new ids. A restore that would have to create or delete the
         interference zone or the edge is refused whole, for the same reason
         a create of one is. Their blocks are restored like any other zone's.
+        An entrance zone is left as the device holds it.
         """
         folder = self.info["backup_dir"]
         with self.app.lock:

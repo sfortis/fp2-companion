@@ -45,7 +45,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.14.0';
+const CARD_VERSION = '1.15.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -124,6 +124,7 @@ const DEFAULTS = {
     interference: 'Interference',
     detection: 'Detection',
     edge: 'Edge',
+    entrance: 'Entrance',
     type: 'Type',
     type_other: 'Other',
     overlap: 'Blocks in more than one zone: {n}',
@@ -212,6 +213,10 @@ const NEW_ZONE_COLOUR = '#ffee58';
 
 const REGION_DETECTION = 0;
 const REGION_INTERFERENCE = 1;
+/* An entrance and exit zone, reported on a PS-T02E in PR #1 (2026-10-31).
+ * No write of it was captured from the Aqara app, so the app never writes
+ * it and the card offers no Edit for it. */
+const REGION_ENTRANCE = 2;
 /* The room's edge: every block OUTSIDE the room, where the FP2 does not look.
  * Read off the live Mancave FP2 on 2026-10-31, whose zone "Edge" covers 288
  * of 320 blocks and leaves out the 4 by 8 room that holds its other zones.
@@ -568,6 +573,7 @@ function legendHeader(text) {
 function zoneType(zone, text) {
   if (zone.regionType === REGION_INTERFERENCE) return text.interference;
   if (zone.regionType === REGION_EDGE) return text.edge;
+  if (zone.regionType === REGION_ENTRANCE) return text.entrance;
   return zone.tagName || text.detection;
 }
 
@@ -1589,14 +1595,17 @@ class Fp2CompanionCard extends HTMLElement {
        * out on the map and can never start an edit by accident. While one
        * zone is being edited the other badges are hidden, because switching
        * would throw the draft away. */
-      if (this._edit !== null) row.appendChild(el('div', ''));
+      const editable = z.regionType !== REGION_ENTRANCE;
+      if (this._edit !== null || !editable) row.appendChild(el('div', ''));
       if (this._edit === null) {
-        const badge = el('button', 'badge', t.edit);
-        badge.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          this._startEdit(z);
-        });
-        row.appendChild(badge);
+        if (editable) {
+          const badge = el('button', 'badge', t.edit);
+          badge.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            this._startEdit(z);
+          });
+          row.appendChild(badge);
+        }
         row.addEventListener('click', () => {
           this._focus = this._focus === z.rangeId ? null : z.rangeId;
           this._updateZones();
@@ -1705,8 +1714,9 @@ class Fp2CompanionCard extends HTMLElement {
         y: row * CELL + 1, width: CELL - 2, height: CELL - 2 }));
     });
 
-    /* A detection zone's name sits at the middle of its blocks. */
-    zones.filter((z) => z.regionType === REGION_DETECTION).forEach((z) => {
+    /* A detection or entrance zone's name sits at the middle of its blocks. */
+    zones.filter((z) => z.regionType === REGION_DETECTION
+      || z.regionType === REGION_ENTRANCE).forEach((z) => {
       const cells = (z.blockList || []).map((b) => blockCell(b, cols));
       if (!cells.length) return;
       const cx = cells.reduce((s, c) => s + c.col, 0) / cells.length;

@@ -30,6 +30,10 @@ BLOCK_COUNT = COLUMNS * ROWS
 
 REGION_DETECTION = 0
 REGION_INTERFERENCE = 1
+# An entrance and exit zone. A PS-T02E reported one in PR #1 on 2026-10-31.
+# No write of it was captured from the Aqara app, so it is read and never
+# written: not edited, created, deleted or restored.
+REGION_ENTRANCE = 2
 # The room's edge: the blocks outside the room, one zone per device, which
 # the FP2 does not report people in. The Aqara app lets its blocks be
 # redrawn, and nothing else about it.
@@ -73,6 +77,7 @@ ERR_INTERFERENCE_LOCKED = "interference_locked"
 # Only the edge's blocks change. It is never created, deleted, renamed or
 # given a type or a sensitivity, because the Aqara app offers none of that.
 ERR_EDGE_LOCKED = "edge_locked"
+ERR_ENTRANCE_LOCKED = "entrance_locked"
 # A zone type the card asked for that is not in the catalogue, or a type on
 # a zone that has none (the interference zone).
 ERR_BAD_TAG = "bad_tag"
@@ -95,7 +100,15 @@ BACKUP_NAME = re.compile(r"^zones-\d{8}T\d{6}(-\d+)?\.json$")
 # The zones the official app was never seen to create or delete, with the code
 # a refusal of either move carries.
 LOCKED_REGIONS = {REGION_INTERFERENCE: ERR_INTERFERENCE_LOCKED,
-                  REGION_EDGE: ERR_EDGE_LOCKED}
+                  REGION_EDGE: ERR_EDGE_LOCKED,
+                  REGION_ENTRANCE: ERR_ENTRANCE_LOCKED}
+
+# The zones a restore leaves exactly as the device holds them.
+UNTOUCHED_REGIONS = (REGION_ENTRANCE,)
+
+
+def _touched(zones):
+    return [z for z in zones if z.get("regionType") not in UNTOUCHED_REGIONS]
 
 
 class ZoneError(ValueError):
@@ -312,13 +325,14 @@ def same_layout(a, b):
 
     The check after a restore: a zone the restore had to create comes back
     under a new rangeId and with whatever tag the server chose, so only the
-    name, the region, the sensitivity and the blocks are compared.
+    name, the region, the sensitivity and the blocks are compared. An
+    entrance zone is not compared, because a restore never writes it.
     """
     def key(zones):
         return sorted(json.dumps({k: canonical(z)[k] for k in
                                   ("name", "regionType", "sensitivity",
                                    "blocks")}, sort_keys=True)
-                      for z in zones)
+                      for z in _touched(zones))
     return key(a) == key(b)
 
 
@@ -329,8 +343,11 @@ def plan_restore(current, backup):
     place. `create`: backup zones whose rangeId is gone, sent as new zones, so
     they come back under a NEW id the server assigns. `delete`: rangeIds that
     exist now and are not in the backup. Zones that already match are left
-    alone, so restoring the state the device is in sends nothing.
+    alone, so restoring the state the device is in sends nothing. An
+    entrance zone is left out on both sides, so it stays as the device
+    holds it.
     """
+    current, backup = _touched(current), _touched(backup)
     now = {z.get("rangeId"): z for z in current}
     kept = {z.get("rangeId") for z in backup}
     update, create = [], []

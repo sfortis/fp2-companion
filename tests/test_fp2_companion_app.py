@@ -607,6 +607,53 @@ def test_a_restore_redraws_the_edge_and_refuses_to_remove_it(fp2):
     assert refusal_code(world) == "edge_locked"
 
 
+def with_entrance(fp2):
+    app, world = fp2()
+    app.cloud_fake.zones.append(zone(4, "Front door", 2, 1, [300, 301]))
+    app.start()
+    return app, world
+
+
+def test_an_entrance_zone_is_never_edited(fp2):
+    """regionType 2, reported on a PS-T02E in PR #1. No write of it was
+    captured, so the app reads it and never writes it."""
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 4, "blockList": [300]}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "entrance_locked"
+
+
+def test_an_entrance_zone_is_never_deleted_or_created(fp2):
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_delete", "4")
+    assert app.cloud_fake.deletes == []
+    assert refusal_code(world) == "entrance_locked"
+    cmd(app, "zone_set", json.dumps({"name": "Door", "blockList": [1],
+                                     "regionType": 2}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "entrance_locked"
+
+
+def test_a_restore_leaves_an_entrance_zone_as_the_device_holds_it(fp2):
+    app, world = with_entrance(fp2)
+    first = zone_attrs(world)["backups"][0]["name"]
+    cloud = app.cloud_fake
+    for z in cloud.zones:
+        if z["rangeId"] == 4:
+            z["blockList"] = [310]
+        if z["rangeId"] == 3:
+            z["blockList"] = [43]
+    cmd(app, "restore", first)
+    assert [w["rangeId"] for w in cloud.zone_writes] == [3]
+    fire(world)
+    assert status(world) == "ok"
+    cloud.zone_writes.clear()
+    cloud.zones = [z for z in cloud.zones if z["rangeId"] != 4]
+    cmd(app, "restore", first)
+    assert cloud.zone_writes == [] and cloud.deletes == []
+    assert status(world) == "ok"
+
+
 def test_the_interference_zone_can_be_redrawn(fp2):
     app, world = fp2()
     app.start()

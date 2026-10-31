@@ -112,9 +112,13 @@ progress in any resource, so the card counts down on its own.
 ## Zones
 
 `GET devex/radar/range/list?deviceId=<did>` returns the zones. A zone has a
-`rangeId`, a `name`, a `regionType` (0 detection, 1 interference, 3 the
-room's edge), a `sensitivity`, a `tagId` and `tagName`, a `colorId` and a
-`blockList`.
+`rangeId`, a `name`, a `regionType` (0 detection, 1 interference, 2
+entrance and exit, 3 the room's edge), a `sensitivity`, a `tagId` and
+`tagName`, a `colorId` and a `blockList`.
+
+A PS-T02E reported an entrance and exit zone on 2026-10-31. No write of one
+has been captured from the Aqara app, so FP2 Companion reads it and never
+writes it. A restore leaves it as the device holds it.
 
 The map is a grid of 16 columns and 20 rows. Block ids run from 1 to 320 in
 row-major order, so a block id is `row * 16 + column + 1` with both counted

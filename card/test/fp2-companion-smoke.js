@@ -494,6 +494,23 @@ function typePick(root) {
   ok(!sent.blockList.includes(135), 'without block 135');
 }
 
+/* An entrance zone (regionType 2, reported on a PS-T02E in PR #1) is shown
+ * and labelled, but never offered for editing. */
+{
+  const zones = [ZONES[0],
+    { rangeId: 4, name: 'Front door', regionType: 2, sensitivity: 1, tagId: 'custom_',
+      tagName: '', colorId: 0, blockList: [300, 301] }];
+  const { root } = mount(typedStates(zones));
+  const rows = [...root.querySelectorAll('.legend .row:not(.head)')];
+  const door = rows.find((r) => r.querySelector('.nm').textContent === 'Front door');
+  eq(door.querySelector('.type').textContent, 'Entrance', 'the legend names an entrance zone');
+  eq(door.querySelector('.sens').textContent, '', 'with no sensitivity');
+  ok(!door.querySelector('.badge'), 'and no Edit button');
+  eq(door.children.length, rows[0].children.length, 'its row keeps the columns');
+  ok([...root.querySelectorAll('svg.map text.label')].some((l) => l.textContent === 'Front door'),
+    'it is labelled on the map');
+}
+
 /* ---------- previewing and restoring a backup ---------- */
 {
   const st = states();
