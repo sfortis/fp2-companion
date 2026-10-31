@@ -6,8 +6,8 @@ fp2_companion:
   # Plan and decisions: docs/DESIGN.md
 
   # Every FP2 is found in Home Assistant by itself, as a HomeKit device of
-  # model PS-S02D: its serial gives the cloud device id, its original name the
-  # entity id prefix, and its area the area. Nothing about a device is written
+  # model PS-S02D or PS-T02E: its serial gives the cloud device id, its
+  # original name the entity id prefix, and its area the area. Nothing about a device is written
   # here. Two optional lists adjust what is found, both by serial:
   #   devices: an FP2 that is not paired over HomeKit
   #   exclude: an FP2 this app should leave alone

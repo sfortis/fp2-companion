@@ -6,13 +6,13 @@ This app exposes them as MQTT discovery entities and feeds the zone card.
 Plan and every owner decision: docs/DESIGN.md
 
 One app serves every FP2 (decision 17). It finds them in Home Assistant as
-HomeKit devices of model PS-S02D, so nothing about a device is written in the
-yaml: the cloud device id comes from the serial number, the entity id prefix
-from the device's original name (which its HomeKit entity ids were built
-from), and the area from the device. A yaml list of serials covers an FP2
-that is not paired over HomeKit. `Fp2Device` holds everything about one FP2;
-`Fp2Companion` holds what they share: the discovery, the one cloud session, the
-sign-in and the routing of commands.
+HomeKit devices of model PS-S02D or PS-T02E, so nothing about a device is
+written in the yaml: the cloud device id comes from the serial number, the
+entity id prefix from the device's original name (which its HomeKit entity ids
+were built from), and the area from the device. A yaml list of serials covers
+an FP2 that is not paired over HomeKit. `Fp2Device` holds everything about one
+FP2; `Fp2Companion` holds what they share: the discovery, the one cloud
+session, the sign-in and the routing of commands.
 
 The app never polls the cloud. It reads at startup, after every write and when
 Refresh is pressed, which keeps the calls on the account to what a person
@@ -108,11 +108,12 @@ STATUS_TEXT = {
 
 # Every FP2 Home Assistant knows over HomeKit. `original` is the name the
 # integration gave the device, which its entity ids were built from; `name`
-# is the one a person may have given it since.
+# is the one a person may have given it since. An FP2 reports its HomeKit
+# model as PS-S02D or, on some units, PS-T02E.
 DISCOVERY_TEMPLATE = """{%- set ns = namespace(out=[]) -%}
 {%- for d in integration_entities('homekit_controller') | map('device_id')
       | reject('none') | unique -%}
-  {%- if device_attr(d, 'model') == 'PS-S02D' -%}
+  {%- if device_attr(d, 'model') in ['PS-S02D', 'PS-T02E'] -%}
     {%- set ns.out = ns.out + [{'serial': device_attr(d, 'serial_number'),
         'original': device_attr(d, 'name'),
         'name': device_attr(d, 'name_by_user') or device_attr(d, 'name'),
