@@ -440,6 +440,17 @@ class AqaraCloud:
                              f"expected a list, got {type(result).__name__}")
         return result
 
+    def list_zone_tags(self, tag_type):
+        """The zone types the Aqara app offers, as the cloud returns them.
+        The names come in the language of the session. zone_model.parse_tags
+        reads the result."""
+        result = self._call("GET", "app/tag/bottom/list",
+                            urlencode({"tagType": tag_type}))
+        if not isinstance(result, list):
+            raise AqaraError("app/tag/bottom/list", CODE_OK,
+                             f"expected a list, got {type(result).__name__}")
+        return result
+
     def set_zone(self, zone):
         """Send one zone item. The caller validates it with zone_model first.
 

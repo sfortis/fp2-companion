@@ -37,8 +37,10 @@ from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
 from live_track import LiveTracker
 from regions import COUNTRIES
 from zone_model import (COLUMNS, ERR_INTERFERENCE_LOCKED, ERR_RANGE_ID,
-                        REGION_DETECTION, REGION_INTERFERENCE, ROWS, ZoneError,
-                        created_zone, list_backups, new_zone, plan_restore,
+                        REGION_DETECTION, REGION_INTERFERENCE, ROWS,
+                        TAG_OTHER_ID, TAG_TYPE_ZONE, ZoneError, apply_tag,
+                        created_zone, list_backups, new_zone, parse_tags,
+                        plan_restore,
                         prune_backups, read_backup, same_layout, validate_zone,
                         wire_zone, write_backup, zone_landed, zones_differ)
 
@@ -185,7 +187,7 @@ class Fp2Device:
     def handle(self, key, payload):
         """One command from this device's topic."""
         if key == "refresh":
-            self.read_all()
+            self.read_all(tags=True)
         elif key == "sensitivity":
             self._write_setting(RID_SENSITIVITY, SENSITIVITY_LABELS, payload)
         elif key == "ai_detection":
@@ -228,13 +230,18 @@ class Fp2Device:
         else:
             self.app.tracker.release(self.info["did"], client)
 
-    def read_all(self, kwargs=None):
+    def read_all(self, kwargs=None, tags=False):
+        """Read the settings and the zones. The zone types are read once and
+        kept by the app, since every FP2 on the account shares them; Refresh
+        (`tags`) reads them again."""
         with self.app.lock:
             try:
                 values = self.cloud.query_rids([RID_SENSITIVITY,
                                                 RID_APPROACH_DISTANCE,
                                                 RID_AI_MODE])
                 zones = self.cloud.list_zones()
+                if tags or not self.app.zone_tags:
+                    self._read_tags()
             except AqaraError as exc:
                 if exc.code in CODES_NOT_ON_ACCOUNT:
                     self.values = {}
@@ -253,6 +260,18 @@ class Fp2Device:
         self._publish_zones()
         self._set_status(STATUS_OK)
         return True
+
+    def _read_tags(self):
+        """Fill the app's zone type catalogue. A failure here leaves the old
+        catalogue and fails nothing else: without it the card can still edit
+        a zone, it only cannot change the zone's type."""
+        try:
+            tags = parse_tags(self.cloud.list_zone_tags(TAG_TYPE_ZONE))
+        except AqaraError as exc:
+            self.app.log(f"zone types not read: {exc}", level="WARNING")
+            return
+        if tags:
+            self.app.zone_tags = tags
 
     def _backup_if_changed(self, zones):
         folder = self.info["backup_dir"]
@@ -351,8 +370,9 @@ class Fp2Device:
 
     def _zone_set(self, payload):
         """A zone from the card: with a rangeId it is an edit, without one a
-        create. Only name, blocks and sensitivity are taken from the card;
-        everything else comes from the zone as the cloud holds it."""
+        create. Only name, blocks, sensitivity and the type's tagId are taken
+        from the card; everything else, the type's name included, comes from
+        the zone as the cloud holds it or from the tag catalogue."""
         try:
             request = json.loads(payload)
         except ValueError:
@@ -393,8 +413,13 @@ class Fp2Device:
             if request.get("regionType", REGION_DETECTION) != REGION_DETECTION:
                 raise ZoneError(ERR_INTERFERENCE_LOCKED,
                                 "only detection zones are created")
-            return new_zone(self.info["did"], request.get("blockList") or [],
+            zone = new_zone(self.info["did"], request.get("blockList") or [],
                             request.get("name"), request.get("sensitivity", 1))
+            # "Other" on a new zone is sent as the official app sends it, an
+            # empty tagId that the server turns into custom_Other.
+            if request.get("tagId") not in (None, TAG_OTHER_ID):
+                apply_tag(zone, request["tagId"], self.app.zone_tags)
+            return zone
         current = next((z for z in before
                         if z.get("rangeId") == request.get("rangeId")), None)
         if current is None:
@@ -403,6 +428,8 @@ class Fp2Device:
         for field in ("name", "blockList", "sensitivity"):
             if field in request:
                 zone[field] = request[field]
+        if "tagId" in request:
+            apply_tag(zone, request["tagId"], self.app.zone_tags)
         return zone
 
     def _zone_delete(self, payload):
@@ -599,6 +626,7 @@ class Fp2Device:
             "did": self.info["did"],
             "grid": {"columns": COLUMNS, "rows": ROWS},
             "zones": self.zones,
+            "tags": self.app.zone_tags,
             "backups": list_backups(self.info["backup_dir"])[:BACKUPS_SHOWN],
             "last_read": _iso(self.last_read),
         })
@@ -732,6 +760,9 @@ class Fp2Companion(hass.Hass):
         # device shares the one session.
         self.lock = threading.Lock()
         self.devices = {}
+        # The zone types the Aqara app offers, shared by every FP2 on the
+        # account (zone_model.parse_tags). Empty until the first read.
+        self.zone_tags = []
         self._retry = None
         self.session = self._make_cloud("")
         self.tracker = self._make_tracker()

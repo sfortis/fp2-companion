@@ -126,6 +126,16 @@ the next free id and turns an empty `tagId` into `custom_Other`.
 `POST devex/radar/range/del` with `{"deviceId", "rangeIdList": [...]}`
 deletes zones. A `range/set` with an empty `blockList` is not a delete.
 
+A zone's type is a tag. The Aqara app fills its type list from
+`GET app/tag/bottom/list?tagType=9`. On 2026-10-31 that returned 30 tags,
+each with a `tagId` such as `1.2` (Sofa Area) or `3.6` (Bed), a `tagName` in
+the language of the session, a `parentType` that groups them, and an `extend`
+string such as `{"sensitivity":"3"}` that holds the sensitivity the Aqara app
+suggests for that type. "Other" is not in the list: a zone without a type
+reads as `custom_Other` named `Other`. FP2 Companion writes a type by
+sending the zone to `range/set` with the new `tagId` and `tagName`, the same
+way it writes the other fields.
+
 ## Live Positions
 
 The Aqara app draws a dot on the map for every target the FP2 tracks. The

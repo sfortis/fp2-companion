@@ -346,6 +346,78 @@ function lastPublish(calls) {
   ok(!lastPublish(calls), 'Cancel sends nothing');
 }
 
+/* ---------- the zone type ---------- */
+/* Part of the catalogue the cloud returned on 2026-10-31. */
+const TAGS = [
+  { tagId: '3.6', tagName: 'Bed', sensitivity: 3 },
+  { tagId: '9.2', tagName: 'Corridor', sensitivity: 1 },
+  { tagId: '1.2', tagName: 'Sofa Area', sensitivity: 3 },
+];
+function typedStates(zones) {
+  const st = states();
+  st[E.zones] = { state: String(zones.length),
+    attributes: Object.assign({}, st[E.zones].attributes, { zones, tags: TAGS }) };
+  return st;
+}
+function typePick(root) {
+  const field = [...root.querySelectorAll('.editor .field')]
+    .find((f) => f.querySelector('label').textContent === 'Type');
+  return field && field.querySelector('select');
+}
+
+{
+  const zones = [Object.assign({}, ZONES[0], { tagId: '1.2', tagName: 'Sofa Area' }),
+    ZONES[1], ZONES[2]];
+  const { root, calls } = mount(typedStates(zones));
+  root.querySelectorAll('.legend .row .badge')[0].click();   // Couch
+  const pick = typePick(root);
+  ok(pick, 'a detection zone has a type dropdown');
+  eq([...pick.options].map((o) => o.textContent).join(','), 'Other,Bed,Corridor,Sofa Area',
+    'Other first, then the catalogue by name');
+  eq(pick.value, '1.2', 'the zone\'s own type is selected');
+  const save = [...root.querySelectorAll('.editor button')].find((b) => b.textContent === 'Save');
+  ok(save.disabled, 'opening a typed zone changes nothing');
+  pick.value = '9.2';
+  ev(pick, 'change');
+  ok(!save.disabled, 'a new type is a change');
+  eq(segButtons(root, 0).find((b) => b.className === 'on').textContent, 'Low',
+    'the type sets the sensitivity the Aqara app suggests');
+  save.click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(sent.tagId, '9.2', 'the type goes out as its tagId');
+  ok(!('tagName' in sent), 'the name is the app\'s to fill in');
+  eq(sent.sensitivity, 1, 'with the suggested sensitivity');
+}
+
+{
+  const zones = [Object.assign({}, ZONES[0], { tagId: 'custom_Mine', tagName: 'Mine' }),
+    ZONES[1], ZONES[2]];
+  const { root } = mount(typedStates(zones));
+  root.querySelectorAll('.legend .row .badge')[0].click();
+  const pick = typePick(root);
+  eq(pick.value, 'custom_Mine', 'a type outside the catalogue stays selected');
+  eq(pick.options[1].textContent, 'Mine', 'and listed by its own name');
+}
+
+{
+  const { root, calls } = mount(typedStates(ZONES));
+  root.querySelectorAll('.legend .row .badge')[2].click();   // interference
+  ok(!typePick(root), 'the interference zone has no type');
+  [...root.querySelectorAll('.editor button')].find((b) => b.textContent === 'Cancel').click();
+  root.querySelector('.sect .cap button').click();            // New zone
+  const pick = typePick(root);
+  eq(pick.value, 'custom_Other', 'a new zone starts as Other');
+  pick.value = '3.6';
+  ev(pick, 'change');
+  const svg = root.querySelector('svg.map');
+  ev(svg.querySelector('rect.hit[data-block="15"]'), 'pointerdown');
+  ev(svg, 'pointerup');
+  [...root.querySelectorAll('.editor button')].find((b) => b.textContent === 'Save').click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(sent.tagId, '3.6', 'a new zone is created with its type');
+  eq(sent.sensitivity, 3, 'and that type\'s sensitivity');
+}
+
 /* ---------- previewing and restoring a backup ---------- */
 {
   const st = states();

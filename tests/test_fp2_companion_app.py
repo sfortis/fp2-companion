@@ -39,10 +39,22 @@ ZONES = [zone(3, "Couch", 0, 2, [43, 44, 45]),
          zone(101, "Interference source", 1, 1, [140, 273])]
 
 
+# Two items of the zone type catalogue as the cloud returned it on 2026-10-31.
+TAG_LIST = [
+    {"extend": '{"sensitivity":"3"}', "tagId": "3.6", "tagName": "Bed",
+     "type": 9, "parentType": "3"},
+    {"extend": '{"sensitivity":"1"}', "tagId": "9.2", "tagName": "Corridor",
+     "type": 9, "parentType": "9"},
+]
+
+
 class FakeCloud:
     def __init__(self):
         self.values = {"14.1.85": "1", "14.47.85": "0", "4.72.85": "0"}
         self.zones = json.loads(json.dumps(ZONES))
+        self.tags = json.loads(json.dumps(TAG_LIST))
+        self.tag_reads = []
+        self.tag_fail = None
         self.writes = []
         self.zone_writes = []
         self.deletes = []
@@ -73,6 +85,12 @@ class FakeCloud:
         if self.fail:
             raise self.fail
         return json.loads(json.dumps(self.zones))
+
+    def list_zone_tags(self, tag_type):
+        self.tag_reads.append(tag_type)
+        if self.tag_fail:
+            raise self.tag_fail
+        return json.loads(json.dumps(self.tags))
 
     def write_rid(self, rid, value):
         self.writes.append((rid, value))
@@ -438,6 +456,75 @@ def test_an_edit_keeps_every_field_the_card_does_not_send(fp2):
     assert sent["tagId"] == "custom_" and sent["regionType"] == 0
     fire(world)
     assert status(world) == "ok"
+
+
+def test_the_zone_types_are_published_beside_the_zones(fp2):
+    app, world = fp2()
+    app.start()
+    assert app.cloud_fake.tag_reads == [9]
+    assert zone_attrs(world)["tags"] == [
+        {"tagId": "3.6", "tagName": "Bed", "sensitivity": 3},
+        {"tagId": "9.2", "tagName": "Corridor", "sensitivity": 1}]
+
+
+def test_the_zone_types_are_read_once_and_again_on_refresh(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone/3/sensitivity", "High")
+    fire(world)
+    assert app.cloud_fake.tag_reads == [9]
+    cmd(app, "refresh")
+    assert app.cloud_fake.tag_reads == [9, 9]
+
+
+def test_unread_zone_types_fail_nothing_else(fp2):
+    app, world = fp2()
+    app.cloud_fake.tag_fail = AqaraError("app/tag/bottom/list", 500, "down")
+    app.start()
+    assert status(world) == "ok"
+    assert zone_attrs(world)["tags"] == []
+    assert len(zone_attrs(world)["zones"]) == 3
+
+
+def test_an_edit_sets_the_type_with_the_catalogue_name(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "tagId": "9.2",
+                                     "tagName": "Anything", "sensitivity": 1}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sent["tagId"] == "9.2" and sent["tagName"] == "Corridor"
+    assert sent["sensitivity"] == 1
+    fire(world)
+    assert status(world) == "ok"
+
+
+def test_a_type_outside_the_catalogue_is_refused(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "tagId": "99.9"}))
+    assert app.cloud_fake.zone_writes == []
+    assert status(world) == "refused"
+
+
+def test_a_create_with_a_type_sends_it(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"name": "Bed", "blockList": [15, 16],
+                                     "sensitivity": 3, "tagId": "3.6"}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert "rangeId" not in sent
+    assert sent["tagId"] == "3.6" and sent["tagName"] == "Bed"
+    fire(world)
+    assert status(world) == "ok"
+
+
+def test_a_create_as_other_is_sent_like_the_official_app(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"name": "Desk", "blockList": [15, 16],
+                                     "tagId": "custom_Other"}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sent["tagId"] == "" and sent["tagName"] == "Other"
 
 
 def test_the_interference_zone_can_be_redrawn(fp2):

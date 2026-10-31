@@ -17,8 +17,8 @@
  * carry one.
  *
  * Editing a zone: press its Edit badge in the legend (or press New zone), then
- * tap or drag on the map to add and remove blocks, set the name and the sensitivity, and
- * press Save. Nothing reaches the device before Save. The app backs the zones
+ * tap or drag on the map to add and remove blocks, set the name, the type and
+ * the sensitivity, and press Save. Nothing reaches the device before Save. The app backs the zones
  * up before every write and reads them back afterwards, by rangeId, so the
  * pill says whether the change landed. Delete and Restore need a second press
  * (owner's decision, 2026-10-30). The interference zone can be redrawn but not
@@ -44,7 +44,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.11.0';
+const CARD_VERSION = '1.12.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -123,6 +123,7 @@ const DEFAULTS = {
     interference: 'Interference',
     detection: 'Detection',
     type: 'Type',
+    type_other: 'Other',
     overlap: 'Blocks in more than one zone: {n}',
     no_zones: 'No zones read yet.',
     legend_hint: 'Press a zone to pick it out on the map, or Edit to change it.',
@@ -207,6 +208,8 @@ const ZONE_COLOURS = ['#42a5f5', '#ffa726', '#66bb6a', '#ab47bc', '#ef5350',
 const NEW_ZONE_COLOUR = '#ffee58';
 
 const REGION_INTERFERENCE = 1;
+/* The type of a zone with none, as the server names it (zone_model.TAG_OTHER_ID). */
+const TAG_OTHER = 'custom_Other';
 const DEFAULT_GRID = { columns: 16, rows: 20 };
 const CELL = 10;
 /* How long an armed Delete or Restore waits for its second press. */
@@ -395,7 +398,7 @@ button.arm { background: var(--error-color, #f44336);
                  margin-bottom: 8px; }
 .editor label { font-size: 12px; color: var(--secondary-text-color);
                 min-width: 72px; }
-.editor input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 13px;
+.editor input, .editor select { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 13px;
                 padding: 6px 8px; border-radius: 6px;
                 border: 1px solid var(--divider-color);
                 background: var(--card-background-color, transparent);
@@ -1765,11 +1768,11 @@ class Fp2CompanionCard extends HTMLElement {
     const zones = (this._za && this._za.zones) || [];
     if (zone) {
       this._edit = { rangeId: zone.rangeId, regionType: zone.regionType,
-        name: zone.name, sensitivity: zone.sensitivity,
+        name: zone.name, sensitivity: zone.sensitivity, tagId: zone.tagId,
         blocks: (zone.blockList || []).slice(), original: zone };
     } else {
       const n = zones.filter((z) => z.regionType !== REGION_INTERFERENCE).length + 1;
-      this._edit = { rangeId: null, regionType: 0,
+      this._edit = { rangeId: null, regionType: 0, tagId: TAG_OTHER,
         name: tpl(t.new_zone_name, { n }), sensitivity: 1, blocks: [], original: null };
     }
     this._preview = null;
@@ -1792,7 +1795,7 @@ class Fp2CompanionCard extends HTMLElement {
     const o = e.original;
     const same = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
     return e.name !== o.name || e.sensitivity !== o.sensitivity
-      || !same(e.blocks, o.blockList || []);
+      || e.tagId !== o.tagId || !same(e.blocks, o.blockList || []);
   }
 
   _drawEditor() {
@@ -1816,6 +1819,8 @@ class Fp2CompanionCard extends HTMLElement {
     });
     nameRow.appendChild(name);
     r.editor.appendChild(nameRow);
+
+    if (e.regionType === 0) r.editor.appendChild(this._typeField());
 
     if (!interference) {
       const sensRow = el('div', 'field');
@@ -1859,6 +1864,49 @@ class Fp2CompanionCard extends HTMLElement {
     this._refreshEditor();
   }
 
+  /* The zone's type, from the catalogue the app reads from the Aqara cloud:
+   * Other first, then the rest by name. Picking one also sets the
+   * sensitivity the Aqara app suggests for it, which can still be changed
+   * before Save (owner, 2026-10-31). A type outside the catalogue stays
+   * listed, so opening such a zone does not change it. */
+  _typeField() {
+    const t = this._config.text;
+    const e = this._edit;
+    const tags = ((this._za && this._za.tags) || [])
+      .filter((tag) => tag && tag.tagId && tag.tagId !== TAG_OTHER)
+      .slice().sort((a, b) => a.tagName.localeCompare(b.tagName));
+    const options = [{ tagId: TAG_OTHER, tagName: t.type_other }].concat(tags);
+    if (e.tagId && !options.some((o) => o.tagId === e.tagId)) {
+      const own = e.original && e.original.tagName;
+      options.splice(1, 0, { tagId: e.tagId, tagName: own || e.tagId });
+    }
+    const row = el('div', 'field');
+    row.appendChild(el('label', '', t.type));
+    const pick = el('select', '');
+    options.forEach((o) => {
+      const opt = el('option', '', o.tagName);
+      opt.value = o.tagId;
+      if (o.tagId === e.tagId) {
+        opt.selected = true;
+        opt.setAttribute('selected', '');
+      }
+      pick.appendChild(opt);
+    });
+    pick.addEventListener('change', () => {
+      e.tagId = pick.value;
+      const tag = tags.find((o) => o.tagId === e.tagId);
+      if (tag && SENSITIVITY[tag.sensitivity]) {
+        e.sensitivity = tag.sensitivity;
+        Object.keys(this._editSeg || {}).forEach((k) => {
+          this._editSeg[k].className = Number(k) === e.sensitivity ? 'on' : '';
+        });
+      }
+      this._refreshEditor();
+    });
+    row.appendChild(pick);
+    return row;
+  }
+
   _refreshEditor() {
     const e = this._edit;
     if (!e || !this._editInfo) return;
@@ -1872,6 +1920,7 @@ class Fp2CompanionCard extends HTMLElement {
     if (!e || this._saveBtn.disabled) return;
     const payload = { name: e.name.trim(), blockList: e.blocks.slice() };
     if (e.regionType !== REGION_INTERFERENCE) payload.sensitivity = e.sensitivity;
+    if (e.regionType === 0 && e.tagId) payload.tagId = e.tagId;
     if (e.rangeId !== null) payload.rangeId = e.rangeId;
     this._command('zone_set', payload);
     this._sent();

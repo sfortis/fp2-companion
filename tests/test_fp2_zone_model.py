@@ -19,8 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent
 from zone_model import (  # noqa: E402
     BLOCK_COUNT, ERR_BAD_BLOCK, ERR_BAD_NAME, ERR_BAD_REGION,
     ERR_BAD_SENSITIVITY, ERR_DUPLICATE_BLOCK, ERR_MISSING_FIELD,
-    ERR_NO_BLOCKS, ERR_RANGE_ID, ERR_WRONG_DEVICE, ZoneError, ascii_map,
-    block_id, cell, created_zone, list_backups, new_zone, plan_restore,
+    ERR_BAD_TAG, ERR_NO_BLOCKS, ERR_RANGE_ID, ERR_WRONG_DEVICE,
+    TAG_OTHER_ID, ZoneError, apply_tag, ascii_map, block_id, cell,
+    created_zone, list_backups, new_zone, parse_tags, plan_restore,
     prune_backups, read_backup, validate_zone, wire_zone, write_backup,
     zone_landed, zones_differ)
 
@@ -284,3 +285,80 @@ def test_a_restore_recreates_a_deleted_zone_without_its_old_id():
     plan = plan_restore(now, LIVE)
     assert [z["name"] for z in plan["create"]] == ["Dinner Table"]
     assert "rangeId" not in plan["create"][0]
+
+
+# ----------------------------------------------------------------- zone types
+# Three items of `app/tag/bottom/list?tagType=9` as read on 2026-10-31.
+TAG_LIST = [
+    {"extend": '{"sensitivity":"3"}', "tagId": "1.2", "tagName": "Sofa Area",
+     "type": 9, "parentType": "1"},
+    {"extend": '{"sensitivity":"1"}', "tagId": "9.3", "tagName": "Intersection ",
+     "type": 9, "parentType": "9"},
+    {"extend": '{"sensitivity":"2"}', "tagId": "5.1", "tagName": "Shower Area",
+     "type": 9, "parentType": "5"},
+]
+
+
+def test_the_tag_catalogue_keeps_id_name_and_suggested_sensitivity():
+    assert parse_tags(TAG_LIST) == [
+        {"tagId": "1.2", "tagName": "Sofa Area", "sensitivity": 3},
+        {"tagId": "9.3", "tagName": "Intersection", "sensitivity": 1},
+        {"tagId": "5.1", "tagName": "Shower Area", "sensitivity": 2},
+    ]
+
+
+@pytest.mark.parametrize("item", [
+    {"tagId": "", "tagName": "Bed"},
+    {"tagId": "3.6", "tagName": "  "},
+    {"tagName": "Bed"},
+    "not a dict",
+])
+def test_a_tag_without_an_id_or_a_name_is_dropped(item):
+    assert parse_tags([item]) == []
+
+
+@pytest.mark.parametrize("extend", [None, "", "{}", '{"sensitivity":"7"}',
+                                    "not json", '["3"]'])
+def test_a_missing_or_odd_suggestion_is_none(extend):
+    tags = parse_tags([{"tagId": "3.6", "tagName": "Bed", "extend": extend}])
+    assert tags[0]["sensitivity"] is None
+
+
+def test_a_repeated_tag_id_is_kept_once():
+    assert len(parse_tags(TAG_LIST + TAG_LIST)) == 3
+
+
+def test_a_result_that_is_not_a_list_is_an_empty_catalogue():
+    assert parse_tags({"tagId": "1.2"}) == [] and parse_tags(None) == []
+
+
+def typed(tag_id="custom_Other", tag_name="Other", region=0):
+    return {"rangeId": 2, "regionType": region, "tagId": tag_id,
+            "tagName": tag_name}
+
+
+def test_a_type_takes_its_name_from_the_catalogue():
+    zone = apply_tag(typed(), "1.2", parse_tags(TAG_LIST))
+    assert zone["tagId"] == "1.2" and zone["tagName"] == "Sofa Area"
+
+
+def test_other_needs_no_catalogue():
+    zone = apply_tag(typed("1.2", "Sofa Area"), TAG_OTHER_ID, [])
+    assert zone["tagId"] == "custom_Other" and zone["tagName"] == "Other"
+
+
+def test_a_type_outside_the_catalogue_is_refused():
+    with pytest.raises(ZoneError) as exc:
+        apply_tag(typed(), "99.9", parse_tags(TAG_LIST))
+    assert exc.value.code == ERR_BAD_TAG
+
+
+def test_the_type_a_zone_already_has_is_kept_without_a_catalogue():
+    zone = apply_tag(typed("custom_Mine", "Mine"), "custom_Mine", [])
+    assert zone["tagName"] == "Mine"
+
+
+def test_the_interference_zone_has_no_type():
+    with pytest.raises(ZoneError) as exc:
+        apply_tag(typed("custom_", "", region=1), "1.2", parse_tags(TAG_LIST))
+    assert exc.value.code == ERR_BAD_TAG

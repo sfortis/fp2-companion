@@ -32,8 +32,8 @@ and does not depend on the cloud.
   of each detection zone, the AI person detection switch and the AI learning
   button, all found automatically for every FP2 paired over HomeKit.
 - **Zone editor card:** paint blocks on the 16 by 20 grid, rename zones, set
-  their sensitivity, create and delete detection zones, and redraw the
-  interference zone.
+  their type and sensitivity, create and delete detection zones, and redraw
+  the interference zone.
 - **Backups:** the zones are backed up whenever they change and before every
   write. Any backup can be previewed on the map and restored.
 - **Live view:** the people and interference sources the FP2 is tracking,

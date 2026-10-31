@@ -160,6 +160,22 @@ def test_a_post_is_signed_over_its_body(store):
     assert h["User-Agent"] == "okhttp/4.12.0"
 
 
+def test_the_zone_types_are_read_with_their_tag_type(store):
+    t = FakeTransport().reply(result=[{"tagId": "1.2", "tagName": "Sofa Area"}])
+    assert client(store, t).list_zone_tags(9) == [
+        {"tagId": "1.2", "tagName": "Sofa Area"}]
+    url = urlsplit(t.requests[0]["url"])
+    assert t.requests[0]["method"] == "GET"
+    assert url.path.endswith("/lumi/app/tag/bottom/list")
+    assert parse_qs(url.query) == {"tagType": ["9"]}
+
+
+def test_zone_types_that_are_not_a_list_are_an_error(store):
+    t = FakeTransport().reply(result={"tagId": "1.2"})
+    with pytest.raises(AqaraError):
+        client(store, t).list_zone_tags(9)
+
+
 def test_a_get_is_signed_over_its_query_string(store):
     t = FakeTransport().reply(result=[])
     client(store, t).list_zones()

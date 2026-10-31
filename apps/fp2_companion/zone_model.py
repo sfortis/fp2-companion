@@ -60,6 +60,18 @@ ERR_RANGE_ID = "range_id"           # a new zone with an id, or an edit without
 # The interference zone may be redrawn but not created or deleted: neither
 # move was captured from the official app (owner, 2026-10-30).
 ERR_INTERFERENCE_LOCKED = "interference_locked"
+# A zone type the card asked for that is not in the catalogue, or a type on
+# a zone that has none (the interference zone).
+ERR_BAD_TAG = "bad_tag"
+
+# A zone's type is a tag. The catalogue the Aqara app offers comes from
+# `app/tag/bottom/list?tagType=9` (read 2026-10-31: 30 tags such as "1.2"
+# Sofa Area and "3.6" Bed, each with a suggested sensitivity). "Other" is
+# not in that list: a zone created with an empty tagId comes back as
+# "custom_Other" named "Other", so that pair is the type of an untyped zone.
+TAG_TYPE_ZONE = 9
+TAG_OTHER_ID = "custom_Other"
+TAG_OTHER_NAME = "Other"
 
 BACKUP_PREFIX = "zones-"
 # A backup name arrives from the card over MQTT, so it is matched against this
@@ -149,6 +161,62 @@ def new_zone(device_id, blocks, name, sensitivity=1,
     return {"deviceId": device_id, "blockList": list(blocks), "colorId": 0,
             "name": name, "regionType": region, "sensitivity": sensitivity,
             "tagId": "", "tagName": "Other"}
+
+
+# ----------------------------------------------------------------- zone types
+def parse_tags(result):
+    """The tag catalogue as `[{tagId, tagName, sensitivity}]`.
+
+    `result` is what `app/tag/bottom/list` returned. The suggested
+    sensitivity sits in `extend`, a JSON string such as '{"sensitivity":"3"}';
+    it is None when it is missing or not 1 to 3. An item without a tagId or a
+    name is dropped, and so is a repeated tagId.
+    """
+    tags, seen = [], set()
+    for item in result if isinstance(result, list) else []:
+        if not isinstance(item, dict):
+            continue
+        tag_id = item.get("tagId")
+        name = item.get("tagName")
+        if not isinstance(tag_id, str) or not tag_id or tag_id in seen:
+            continue
+        if not isinstance(name, str) or not name.strip():
+            continue
+        seen.add(tag_id)
+        tags.append({"tagId": tag_id, "tagName": name.strip(),
+                     "sensitivity": _suggested_sensitivity(item.get("extend"))})
+    return tags
+
+
+def _suggested_sensitivity(extend):
+    try:
+        value = int(json.loads(extend).get("sensitivity"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return value if value in SENSITIVITIES else None
+
+
+def apply_tag(zone, tag_id, tags):
+    """Set the zone's type to `tag_id`, with the name the catalogue gives.
+
+    The card sends only the id. The name always comes from the catalogue, or
+    is "Other" for TAG_OTHER_ID, so the card can never write a type the
+    Aqara app does not know. Asking for the tag the zone already has changes
+    nothing, which keeps a zone whose type is outside the catalogue editable.
+    """
+    if tag_id == zone.get("tagId"):
+        return zone
+    if zone.get("regionType") != REGION_DETECTION:
+        raise ZoneError(ERR_BAD_TAG, "only a detection zone has a type")
+    if tag_id == TAG_OTHER_ID:
+        name = TAG_OTHER_NAME
+    else:
+        name = next((t["tagName"] for t in tags if t["tagId"] == tag_id), None)
+        if name is None:
+            raise ZoneError(ERR_BAD_TAG, f"{tag_id!r} is not a zone type")
+    zone["tagId"] = tag_id
+    zone["tagName"] = name
+    return zone
 
 
 # ----------------------------------------------------------------- comparison
