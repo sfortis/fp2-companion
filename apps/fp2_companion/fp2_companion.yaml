@@ -1,0 +1,41 @@
+fp2_companion:
+  module: fp2_companion
+  class: Fp2Companion
+
+  # An Aqara FP2's settings and zones through the Aqara cloud app API.
+  # Plan and decisions: docs/DESIGN.md
+
+  # Every FP2 is found in Home Assistant by itself, as a HomeKit device of
+  # model PS-S02D: its serial gives the cloud device id, its original name the
+  # entity id prefix, and its area the area. Nothing about a device is written
+  # here. Two optional lists adjust what is found, both by serial:
+  #   devices: an FP2 that is not paired over HomeKit
+  #   exclude: an FP2 this app should leave alone
+  # devices: []
+  # exclude: []
+
+  # The Aqara app identity that signs every call is built in, one pair per
+  # region (regions.py). A pair of your own is optional and is tried after
+  # the region's: put it in the add-on's /config/secrets.yaml and uncomment.
+  # app_id: !secret aqara_app_id
+  # app_key: !secret aqara_app_key
+  # More pairs, as a list of [app_id, app_key]:
+  # app_identities: !secret aqara_app_identities
+
+  # The session lives in /share/appdaemon/fp2_companion/session.json and is
+  # created by signing in on the card (tools/login.py is the command line
+  # fallback). Every FP2 shares it. A refresh revokes the previous token, so
+  # only ONE instance of this app may use that session file.
+
+  # The daily token check. It refreshes only when fewer than three days remain,
+  # so on most days it reads a file and makes no call.
+  token_check_time: "04:10:00"
+
+  # Zone backups kept in /share/appdaemon/fp2_companion/backups/<device id>/.
+  # One is written whenever a read finds the zones changed (and, once zone
+  # writes are enabled, before every zone write), so 50 covers a long history
+  # at a few KB each.
+  backups_keep: 50
+
+  base_topic: fp2companion
+  discovery_prefix: homeassistant

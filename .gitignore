@@ -1,0 +1,15 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+*.pyc
+
+# Local only: session notes, agent instructions and the deploy target.
+memory/
+CLAUDE.md
+.claude/
+scripts/deploy.env
+
+# Render output from card/test/fp2-companion-render.js.
+*.html
+*.png
