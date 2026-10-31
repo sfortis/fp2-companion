@@ -30,7 +30,11 @@ BLOCK_COUNT = COLUMNS * ROWS
 
 REGION_DETECTION = 0
 REGION_INTERFERENCE = 1
-REGION_TYPES = (REGION_DETECTION, REGION_INTERFERENCE)
+# The room's edge: the blocks outside the room, one zone per device, which
+# the FP2 does not report people in. The Aqara app lets its blocks be
+# redrawn, and nothing else about it.
+REGION_EDGE = 3
+REGION_TYPES = (REGION_DETECTION, REGION_INTERFERENCE, REGION_EDGE)
 
 SENSITIVITIES = (1, 2, 3)
 
@@ -46,6 +50,12 @@ ZONE_FIELDS = ("deviceId", "blockList", "colorId", "name", "rangeId",
 # not by an exact copy of what was sent.
 NEW_ZONE_FIELDS = tuple(k for k in ZONE_FIELDS if k != "rangeId")
 
+# The edge is written with six fields and no sensitivity or tag, as the Aqara
+# app sent it on 2026-10-31 when one block was taken out. The server kept the
+# sensitivity and the tag the zone already had.
+EDGE_FIELDS = ("deviceId", "blockList", "colorId", "name", "rangeId",
+               "regionType")
+
 # Why a zone was refused. A caller decides on these codes, never on the text
 # beside them.
 ERR_MISSING_FIELD = "missing_field"
@@ -60,6 +70,9 @@ ERR_RANGE_ID = "range_id"           # a new zone with an id, or an edit without
 # The interference zone may be redrawn but not created or deleted: neither
 # move was captured from the official app (owner, 2026-10-30).
 ERR_INTERFERENCE_LOCKED = "interference_locked"
+# Only the edge's blocks change. It is never created, deleted, renamed or
+# given a type or a sensitivity, because the Aqara app offers none of that.
+ERR_EDGE_LOCKED = "edge_locked"
 # A zone type the card asked for that is not in the catalogue, or a type on
 # a zone that has none (the interference zone).
 ERR_BAD_TAG = "bad_tag"
@@ -77,6 +90,12 @@ BACKUP_PREFIX = "zones-"
 # A backup name arrives from the card over MQTT, so it is matched against this
 # pattern before it is ever joined to a path.
 BACKUP_NAME = re.compile(r"^zones-\d{8}T\d{6}(-\d+)?\.json$")
+
+
+# The zones the official app was never seen to create or delete, with the code
+# a refusal of either move carries.
+LOCKED_REGIONS = {REGION_INTERFERENCE: ERR_INTERFERENCE_LOCKED,
+                  REGION_EDGE: ERR_EDGE_LOCKED}
 
 
 class ZoneError(ValueError):
@@ -115,13 +134,17 @@ def validate_zone(zone, device_id, new=False):
 
     `new` is a zone to create, which must NOT carry a `rangeId`. An edit
     must, or the server would read it as a create and add a second zone.
+    The edge carries no sensitivity, so its sensitivity is not checked.
     """
+    edge = zone.get("regionType") == REGION_EDGE
+    if edge and new:
+        raise ZoneError(ERR_EDGE_LOCKED, "the room's edge is never created")
     if new and zone.get("rangeId") is not None:
         raise ZoneError(ERR_RANGE_ID, "a new zone carries a rangeId")
     if not new and not _is_range_id(zone.get("rangeId")):
         raise ZoneError(ERR_RANGE_ID, f"an edit needs a rangeId, "
                                       f"got {zone.get('rangeId')!r}")
-    fields = NEW_ZONE_FIELDS if new else ZONE_FIELDS
+    fields = _wire_fields(zone, new)
     missing = [k for k in fields if k not in zone]
     if missing:
         raise ZoneError(ERR_MISSING_FIELD, ", ".join(missing))
@@ -137,7 +160,7 @@ def validate_zone(zone, device_id, new=False):
         raise ZoneError(ERR_DUPLICATE_BLOCK, "blockList repeats a block")
     if zone["regionType"] not in REGION_TYPES:
         raise ZoneError(ERR_BAD_REGION, repr(zone["regionType"]))
-    if zone["sensitivity"] not in SENSITIVITIES:
+    if not edge and zone["sensitivity"] not in SENSITIVITIES:
         raise ZoneError(ERR_BAD_SENSITIVITY, repr(zone["sensitivity"]))
     name = zone["name"]
     if not isinstance(name, str) or not name.strip():
@@ -150,9 +173,23 @@ def _is_range_id(value):
 
 def wire_zone(zone, new=False):
     """The zone as it is sent to `range/set`: exactly the known fields."""
-    out = {k: zone[k] for k in (NEW_ZONE_FIELDS if new else ZONE_FIELDS)}
+    out = {k: zone[k] for k in _wire_fields(zone, new)}
     out["blockList"] = list(zone["blockList"])
     return out
+
+
+def stored_zone(zone):
+    """The zone as a backup keeps it: every field a read returns, the edge's
+    sensitivity and tag included, although a write of the edge omits them."""
+    out = {k: zone[k] for k in ZONE_FIELDS}
+    out["blockList"] = list(zone["blockList"])
+    return out
+
+
+def _wire_fields(zone, new):
+    if zone.get("regionType") == REGION_EDGE:
+        return EDGE_FIELDS
+    return NEW_ZONE_FIELDS if new else ZONE_FIELDS
 
 
 def new_zone(device_id, blocks, name, sensitivity=1,
@@ -330,7 +367,7 @@ def write_backup(directory, zones, now, reason):
         path = os.path.join(directory, name)
         n += 1
     body = {"saved_at": now, "reason": reason,
-            "zones": [wire_zone(z) for z in zones]}
+            "zones": [stored_zone(z) for z in zones]}
     tmp = f"{path}.tmp"
     with open(tmp, "w") as fh:
         json.dump(body, fh, indent=1)

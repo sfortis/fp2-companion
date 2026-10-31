@@ -130,8 +130,15 @@ deletes zones. A `range/set` with an empty `blockList` is not a delete.
 A zone of `regionType` 3 marks the room's edge. It holds every block
 OUTSIDE the room, where the FP2 does not look. On 2026-10-31 one FP2 had a
 zone named "Edge" with `rangeId` 103 covering 288 of the 320 blocks; the 32
-it left out formed a 4 by 8 room that held that FP2's other zones. No write
-of it was captured, so FP2 Companion shows it and never writes it.
+it left out formed a 4 by 8 room that held that FP2's other zones.
+
+The Aqara app lets a person redraw the edge's blocks and change nothing else
+on it. On 2026-10-31 it took one block out of that edge with a `range/set`
+that carried six fields: `deviceId`, `rangeId`, `regionType`, `name`,
+`colorId` and `blockList`. It sent no `sensitivity`, `tagId` or `tagName`,
+and the server kept the values the zone already had for those three. FP2
+Companion writes the edge the same way. It refuses to rename the edge, to
+give it a type or a sensitivity, and to create or delete one.
 
 A zone's type is a tag. The Aqara app fills its type list from
 `GET app/tag/bottom/list?tagType=9`. On 2026-10-31 that returned 30 tags,

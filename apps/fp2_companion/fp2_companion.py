@@ -36,8 +36,9 @@ from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          did_from_serial, jwt_exp)
 from live_track import LiveTracker
 from regions import COUNTRIES
-from zone_model import (COLUMNS, ERR_INTERFERENCE_LOCKED, ERR_RANGE_ID,
-                        REGION_DETECTION, REGION_INTERFERENCE, ROWS,
+from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
+                        ERR_RANGE_ID, LOCKED_REGIONS, REGION_DETECTION,
+                        REGION_EDGE, ROWS,
                         TAG_OTHER_ID, TAG_TYPE_ZONE, ZoneError, apply_tag,
                         created_zone, list_backups, new_zone, parse_tags,
                         plan_restore,
@@ -408,10 +409,11 @@ class Fp2Device:
 
     def _build_zone(self, kind, request, before):
         if kind == KIND_CREATE:
-            # A second interference zone was never captured from the official
-            # app, so this app does not make one (owner, 2026-10-30).
-            if request.get("regionType", REGION_DETECTION) != REGION_DETECTION:
-                raise ZoneError(ERR_INTERFERENCE_LOCKED,
+            # A second interference zone or edge was never captured from the
+            # official app, so this app does not make one (owner, 2026-10-30).
+            region = request.get("regionType", REGION_DETECTION)
+            if region != REGION_DETECTION:
+                raise ZoneError(LOCKED_REGIONS.get(region, ERR_BAD_REGION),
                                 "only detection zones are created")
             zone = new_zone(self.info["did"], request.get("blockList") or [],
                             request.get("name"), request.get("sensitivity", 1))
@@ -425,6 +427,19 @@ class Fp2Device:
         if current is None:
             raise ZoneError(ERR_RANGE_ID, f"no zone {request.get('rangeId')}")
         zone = dict(current)
+        if current.get("regionType") == REGION_EDGE:
+            # The Aqara app redraws the edge and changes nothing else on it
+            # (captured 2026-10-31), so a request that changes anything else
+            # is refused whole.
+            changed = [f for f in ("name", "sensitivity", "tagId")
+                       if f in request and request[f] != current.get(f)]
+            if changed:
+                raise ZoneError(ERR_EDGE_LOCKED,
+                                f"only the edge's blocks change, not "
+                                f"{', '.join(changed)}")
+            if "blockList" in request:
+                zone["blockList"] = request["blockList"]
+            return zone
         for field in ("name", "blockList", "sensitivity"):
             if field in request:
                 zone[field] = request[field]
@@ -444,9 +459,10 @@ class Fp2Device:
                               None)
                 if target is None:
                     raise ZoneError(ERR_RANGE_ID, f"no zone {rid}")
-                if target.get("regionType") == REGION_INTERFERENCE:
-                    raise ZoneError(ERR_INTERFERENCE_LOCKED,
-                                    "the interference zone is not deleted")
+                locked = LOCKED_REGIONS.get(target.get("regionType"))
+                if locked:
+                    raise ZoneError(locked, f"{target.get('name')} is not "
+                                            "deleted")
                 self._backup_before(before, "before-write")
                 self.cloud.delete_zones([rid])
             except ZoneError as exc:
@@ -465,8 +481,8 @@ class Fp2Device:
         Changed zones are rewritten in place, zones the backup lacks are
         deleted, and zones the device lacks are created again, which gives
         them new ids. A restore that would have to create or delete the
-        interference zone is refused whole, for the same reason a create
-        of one is.
+        interference zone or the edge is refused whole, for the same reason
+        a create of one is. Their blocks are restored like any other zone's.
         """
         folder = self.info["backup_dir"]
         with self.app.lock:
@@ -475,13 +491,14 @@ class Fp2Device:
                 before = self.cloud.list_zones()
                 plan = plan_restore(before, target)
                 now = {z.get("rangeId"): z for z in before}
-                if (any(z.get("regionType") == REGION_INTERFERENCE
-                        for z in plan["create"])
-                        or any(now[r].get("regionType") == REGION_INTERFERENCE
-                               for r in plan["delete"])):
-                    raise ZoneError(ERR_INTERFERENCE_LOCKED,
-                                    "the restore would create or delete "
-                                    "the interference zone")
+                moved = ([z.get("regionType") for z in plan["create"]]
+                         + [now[r].get("regionType") for r in plan["delete"]])
+                locked = next((LOCKED_REGIONS[m] for m in moved
+                               if m in LOCKED_REGIONS), None)
+                if locked:
+                    raise ZoneError(locked, "the restore would create or "
+                                            "delete the interference zone "
+                                            "or the edge")
                 if not (plan["update"] or plan["create"] or plan["delete"]):
                     self.app.log(f"restore {name}: the zones already match")
                     self._set_status(STATUS_OK)

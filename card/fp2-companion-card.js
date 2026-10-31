@@ -45,7 +45,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.13.0';
+const CARD_VERSION = '1.14.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -133,6 +133,7 @@ const DEFAULTS = {
     new_zone: 'New zone',
     new_zone_name: 'Detection Zone {n}',
     edit_hint: 'Tap or drag on the map to add or remove blocks.',
+    edge_hint: 'Only the blocks of the edge can change. Tap or drag on the map to add or remove them.',
     name: 'Name',
     save: 'Save',
     cancel: 'Cancel',
@@ -214,8 +215,9 @@ const REGION_INTERFERENCE = 1;
 /* The room's edge: every block OUTSIDE the room, where the FP2 does not look.
  * Read off the live Mancave FP2 on 2026-10-31, whose zone "Edge" covers 288
  * of 320 blocks and leaves out the 4 by 8 room that holds its other zones.
- * It is shown grey and never edited, because no write of it was captured
- * from the Aqara app (owner, 2026-10-31). */
+ * It is shown grey. Only its blocks can be redrawn, which is all the Aqara
+ * app lets a person change on it (captured 2026-10-31); it has no name,
+ * type or sensitivity to edit and is never created or deleted. */
 const REGION_EDGE = 3;
 const EDGE_COLOUR = 'var(--disabled-text-color, #9e9e9e)';
 /* The type of a zone with none, as the server names it (zone_model.TAG_OTHER_ID). */
@@ -1587,17 +1589,14 @@ class Fp2CompanionCard extends HTMLElement {
        * out on the map and can never start an edit by accident. While one
        * zone is being edited the other badges are hidden, because switching
        * would throw the draft away. */
-      const editable = z.regionType !== REGION_EDGE;
-      if (this._edit !== null || !editable) row.appendChild(el('div', ''));
+      if (this._edit !== null) row.appendChild(el('div', ''));
       if (this._edit === null) {
-        if (editable) {
-          const badge = el('button', 'badge', t.edit);
-          badge.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            this._startEdit(z);
-          });
-          row.appendChild(badge);
-        }
+        const badge = el('button', 'badge', t.edit);
+        badge.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this._startEdit(z);
+        });
+        row.appendChild(badge);
         row.addEventListener('click', () => {
           this._focus = this._focus === z.rangeId ? null : z.rangeId;
           this._updateZones();
@@ -1827,7 +1826,10 @@ class Fp2CompanionCard extends HTMLElement {
     const t = this._config.text;
     const e = this._edit;
     const interference = e.regionType === REGION_INTERFERENCE;
+    const edge = e.regionType === REGION_EDGE;
 
+    /* The edge has only its blocks, so it gets no name, type or sensitivity
+     * field and no Delete. */
     const nameRow = el('div', 'field');
     nameRow.appendChild(el('label', '', t.name));
     const name = el('input', '');
@@ -1842,11 +1844,11 @@ class Fp2CompanionCard extends HTMLElement {
       this._refreshEditor();
     });
     nameRow.appendChild(name);
-    r.editor.appendChild(nameRow);
+    if (!edge) r.editor.appendChild(nameRow);
 
     if (e.regionType === REGION_DETECTION) r.editor.appendChild(this._typeField());
 
-    if (!interference) {
+    if (!interference && !edge) {
       const sensRow = el('div', 'field');
       sensRow.appendChild(el('label', '', t.sensitivity));
       const seg = el('div', 'seg');
@@ -1878,7 +1880,7 @@ class Fp2CompanionCard extends HTMLElement {
     cancel.addEventListener('click', () => this._cancelEdit());
     btns.appendChild(cancel);
     btns.appendChild(el('span', 'spacer'));
-    if (e.rangeId !== null && !interference) {
+    if (e.rangeId !== null && !interference && !edge) {
       btns.appendChild(armedButton(t.delete, t.confirm, () => {
         this._command('zone_delete', String(e.rangeId));
         this._sent();
@@ -1935,7 +1937,7 @@ class Fp2CompanionCard extends HTMLElement {
     const e = this._edit;
     if (!e || !this._editInfo) return;
     const t = this._config.text;
-    this._editInfo.textContent = t.edit_hint;
+    this._editInfo.textContent = e.regionType === REGION_EDGE ? t.edge_hint : t.edit_hint;
     this._saveBtn.disabled = !e.blocks.length || !e.name.trim() || !this._changed();
   }
 
@@ -1943,7 +1945,9 @@ class Fp2CompanionCard extends HTMLElement {
     const e = this._edit;
     if (!e || this._saveBtn.disabled) return;
     const payload = { name: e.name.trim(), blockList: e.blocks.slice() };
-    if (e.regionType !== REGION_INTERFERENCE) payload.sensitivity = e.sensitivity;
+    /* The app takes only the blocks of the edge and refuses anything else. */
+    if (e.regionType === REGION_EDGE) delete payload.name;
+    else if (e.regionType !== REGION_INTERFERENCE) payload.sensitivity = e.sensitivity;
     if (e.regionType === REGION_DETECTION && e.tagId) payload.tagId = e.tagId;
     if (e.rangeId !== null) payload.rangeId = e.rangeId;
     this._command('zone_set', payload);

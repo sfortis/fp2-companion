@@ -448,11 +448,50 @@ function typePick(root) {
   const edgeRow = rows.find((r) => r.querySelector('.nm').textContent === 'Edge');
   eq(edgeRow.querySelector('.type').textContent, 'Edge', 'the legend names the edge');
   eq(edgeRow.querySelector('.sens').textContent, '', 'with no sensitivity');
-  ok(!edgeRow.querySelector('.badge'), 'and no Edit button');
   eq(edgeRow.children.length, rows[0].children.length, 'its row keeps the columns');
   root.querySelector('.sect .cap button').click();            // New zone
   eq(root.querySelector('.editor input').value, 'Detection Zone 2',
     'the edge is not counted in a new zone\'s name');
+}
+
+/* The Aqara app redraws the edge and changes nothing else on it (captured
+ * 2026-10-31, when block 135 was taken out), so the card does the same. */
+{
+  const room = new Set();
+  for (let r = 0; r < 8; r += 1) for (let c = 6; c < 10; c += 1) room.add(r * 16 + c + 1);
+  const outside = [];
+  for (let b = 1; b <= 320; b += 1) if (!room.has(b)) outside.push(b);
+  const zones = [
+    { rangeId: 1, name: 'Desk', regionType: 0, sensitivity: 1, tagId: '3.3',
+      tagName: 'Desk', blockList: [23, 24, 39, 40] },
+    { rangeId: 103, name: 'Edge', regionType: 3, sensitivity: 1, tagId: 'custom_',
+      tagName: '', colorId: 5, blockList: outside },
+  ];
+  const { root, calls } = mount(typedStates(zones));
+  const rows = [...root.querySelectorAll('.legend .row:not(.head)')];
+  const edgeRow = rows.find((r) => r.querySelector('.nm').textContent === 'Edge');
+  edgeRow.querySelector('.badge').click();
+  const editor = root.querySelector('.editor');
+  ok(!editor.querySelector('input'), 'the edge has no name field');
+  ok(!typePick(root), 'no type');
+  ok(!editor.querySelector('.seg'), 'and no sensitivity');
+  ok(![...editor.querySelectorAll('button')].some((b) => b.textContent === 'Delete'),
+    'the edge cannot be deleted');
+  ok(editor.querySelector('.note').textContent.startsWith('Only the blocks of the edge'),
+    'the editor says only the blocks change');
+  const save = [...editor.querySelectorAll('button')].find((b) => b.textContent === 'Save');
+  ok(save.disabled, 'nothing to save before a block changes');
+  const svg = root.querySelector('svg.map');
+  ev(svg.querySelector('rect.hit[data-block="135"]'), 'pointerdown');
+  ev(svg, 'pointerup');
+  ok(!save.disabled, 'a block taken out is a change');
+  save.click();
+  const pub = lastPublish(calls);
+  eq(pub.topic, 'fp2companion/54ef44a1b2c3/cmd/zone_set', 'the edge is saved through zone_set');
+  const sent = JSON.parse(pub.payload);
+  eq(Object.keys(sent).sort().join(','), 'blockList,rangeId', 'with its blocks and its id only');
+  eq(sent.blockList.length, 287, 'one block fewer');
+  ok(!sent.blockList.includes(135), 'without block 135');
 }
 
 /* ---------- previewing and restoring a backup ---------- */

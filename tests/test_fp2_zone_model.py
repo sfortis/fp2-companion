@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent
 from zone_model import (  # noqa: E402
     BLOCK_COUNT, ERR_BAD_BLOCK, ERR_BAD_NAME, ERR_BAD_REGION,
     ERR_BAD_SENSITIVITY, ERR_DUPLICATE_BLOCK, ERR_MISSING_FIELD,
-    ERR_BAD_TAG, ERR_NO_BLOCKS, ERR_RANGE_ID, ERR_WRONG_DEVICE,
+    ERR_BAD_TAG, ERR_EDGE_LOCKED, ERR_NO_BLOCKS, ERR_RANGE_ID,
+    ERR_WRONG_DEVICE,
     TAG_OTHER_ID, ZoneError, apply_tag, ascii_map, block_id, cell,
     created_zone, list_backups, new_zone, parse_tags, plan_restore,
     prune_backups, read_backup, validate_zone, wire_zone, write_backup,
@@ -362,3 +363,33 @@ def test_the_interference_zone_has_no_type():
     with pytest.raises(ZoneError) as exc:
         apply_tag(typed("custom_", "", region=1), "1.2", parse_tags(TAG_LIST))
     assert exc.value.code == ERR_BAD_TAG
+
+
+# The Mancave edge as a read returned it on 2026-10-31.
+EDGE = zone(103, "Edge", 3, 1, 5, "custom_", "", [1, 2, 3, 135])
+
+
+def test_the_edge_is_written_with_the_six_fields_of_the_aqara_app():
+    validate_zone(fresh(EDGE), DID)
+    assert wire_zone(EDGE) == {"deviceId": DID, "blockList": [1, 2, 3, 135],
+                               "colorId": 5, "name": "Edge", "rangeId": 103,
+                               "regionType": 3}
+
+
+def test_the_edge_needs_no_sensitivity():
+    edge = wire_zone(EDGE)
+    validate_zone(edge, DID)
+
+
+def test_the_edge_is_never_created():
+    edge = fresh(EDGE)
+    del edge["rangeId"]
+    with pytest.raises(ZoneError) as err:
+        validate_zone(edge, DID, new=True)
+    assert err.value.code == ERR_EDGE_LOCKED
+
+
+def test_a_backup_keeps_the_edges_sensitivity_and_tag(tmp_path):
+    name = write_backup(str(tmp_path), [EDGE], 1793350000, "test")
+    kept = read_backup(str(tmp_path), name)["zones"][0]
+    assert kept == EDGE

@@ -100,7 +100,8 @@ class FakeCloud:
     def set_zone(self, zone):
         """Like the server in the 2026-10-30 capture: a zone without a
         rangeId is created under the next free id and an empty tag becomes
-        custom_Other."""
+        custom_Other. An edit keeps the fields it does not send, as the
+        server kept the edge's sensitivity and tag on 2026-10-31."""
         self.zone_writes.append(json.loads(json.dumps(zone)))
         if not self.lands:
             return
@@ -111,7 +112,7 @@ class FakeCloud:
             z["tagId"] = z["tagId"] or "custom_Other"
             self.zones.append(z)
         else:
-            self.zones = [z if r["rangeId"] == z["rangeId"] else r
+            self.zones = [{**r, **z} if r["rangeId"] == z["rangeId"] else r
                           for r in self.zones]
 
     def delete_zones(self, ids):
@@ -527,16 +528,83 @@ def test_a_create_as_other_is_sent_like_the_official_app(fp2):
     assert sent["tagId"] == "" and sent["tagName"] == "Other"
 
 
-def test_the_room_edge_is_never_written(fp2):
-    """regionType 3, the space outside the room, was never captured being
-    written by the Aqara app, so the app refuses it (owner, 2026-10-31)."""
+def with_edge(fp2):
     app, world = fp2()
-    edge = zone(103, "Edge", 3, 1, [1, 2, 3])
-    app.cloud_fake.zones.append(edge)
+    app.cloud_fake.zones.append(zone(103, "Edge", 3, 1, [1, 2, 3]))
     app.start()
+    return app, world
+
+
+def refusal_code(world):
+    attrs = mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs")
+    return json.loads(attrs)["detail"]["code"]
+
+
+def test_the_room_edge_is_redrawn_with_the_six_fields_the_aqara_app_sends(fp2):
+    """regionType 3 is the space outside the room. The Aqara app redraws it
+    with six fields and no sensitivity or tag (captured 2026-10-31)."""
+    app, world = with_edge(fp2)
     cmd(app, "zone_set", json.dumps({"rangeId": 103, "blockList": [1, 2]}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sorted(sent) == sorted(["deviceId", "blockList", "colorId", "name",
+                                   "rangeId", "regionType"])
+    assert sent["blockList"] == [1, 2] and sent["name"] == "Edge"
+    assert sent["regionType"] == 3
+    fire(world)
+    assert status(world) == "ok"
+
+
+@pytest.mark.parametrize("change", [{"name": "Outside"}, {"sensitivity": 3},
+                                    {"tagId": "3.6"}])
+def test_only_the_edges_blocks_change(fp2, change):
+    app, world = with_edge(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "blockList": [1, 2],
+                                     **change}))
     assert app.cloud_fake.zone_writes == []
-    assert status(world) == "refused"
+    assert refusal_code(world) == "edge_locked"
+
+
+def test_the_card_resending_the_edges_own_values_is_not_a_change(fp2):
+    app, world = with_edge(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "blockList": [1, 2],
+                                     "name": "Edge", "sensitivity": 1}))
+    assert app.cloud_fake.zone_writes[-1]["blockList"] == [1, 2]
+
+
+def test_the_room_edge_is_never_deleted(fp2):
+    app, world = with_edge(fp2)
+    cmd(app, "zone_delete", "103")
+    assert app.cloud_fake.deletes == []
+    assert refusal_code(world) == "edge_locked"
+
+
+def test_a_room_edge_is_never_created(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"name": "Edge", "blockList": [1],
+                                     "regionType": 3}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "edge_locked"
+
+
+def test_a_restore_redraws_the_edge_and_refuses_to_remove_it(fp2):
+    app, world = with_edge(fp2)
+    first = zone_attrs(world)["backups"][0]["name"]
+    cloud = app.cloud_fake
+    for z in cloud.zones:
+        if z["rangeId"] == 103:
+            z["blockList"] = [1, 2]
+    cmd(app, "restore", first)
+    assert cloud.zone_writes[-1]["blockList"] == [1, 2, 3]
+    assert "sensitivity" not in cloud.zone_writes[-1]
+    fire(world)
+    assert status(world) == "ok"
+
+    cloud.zone_writes.clear()
+    cloud.zones = [z for z in cloud.zones if z["rangeId"] != 103]
+    cmd(app, "restore", first)
+    assert cloud.zone_writes == [] and cloud.deletes == []
+    assert refusal_code(world) == "edge_locked"
 
 
 def test_the_interference_zone_can_be_redrawn(fp2):
