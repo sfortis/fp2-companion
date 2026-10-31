@@ -65,7 +65,7 @@ not depend on the cloud.
     not. It is enough to sign in to Aqara once but does not reveal the
     password, and the app keeps only the token.
 17. One app serves every FP2. It finds them in Home Assistant as HomeKit
-    devices of model `PS-S02D`, at startup and on Refresh. A yaml list of
+    devices of model `PS-S02D` or `PS-T02E`, at startup and on Refresh. A yaml list of
     serials covers an FP2 that is not paired over HomeKit, and a yaml
     `exclude` drops one. One session serves them all, because a refresh
     revokes the previous token and two sessions on one file would cut each

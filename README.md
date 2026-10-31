@@ -47,7 +47,7 @@ and does not depend on the cloud.
 
 - Home Assistant with the FP2 paired through **HomeKit Device** (the
   `homekit_controller` integration). The app finds FP2s by their HomeKit
-  model, `PS-S02D`.
+  model, `PS-S02D` or `PS-T02E`.
 - The **AppDaemon** add-on (4.5 or later), with its MQTT plugin connected to
   the same broker as Home Assistant's MQTT integration.
 - An **Aqara account** that owns the FP2s.

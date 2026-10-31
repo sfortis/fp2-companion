@@ -215,6 +215,7 @@ def test_the_device_is_found_in_home_assistant(fp2):
     app.start()
     assert DID in app.dids
     assert "PS-S02D" in app.templates[0]
+    assert "PS-T02E" in app.templates[0]
     cfg = discovery(world, "select", "sensitivity")
     assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
     assert cfg["device"]["suggested_area"] == "Living Room"
