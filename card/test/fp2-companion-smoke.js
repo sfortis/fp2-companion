@@ -733,6 +733,26 @@ async function liveChecks() {
     ok(off.on === false && off.client === lease.client, 'and gives its lease back');
   }
   {
+    /* The FP2 sends no push while it tracks nobody (2026-10-31). */
+    const conn = fakeConnection();
+    const { card, root } = mount(undefined, conn);
+    await Promise.resolve();
+    conn.send({ state: 'watching' });
+    eq(root.querySelector('.livebar').textContent, 'Live · nobody in view',
+      'subscribed with no push is an empty room, not a connection in progress');
+    ok(root.querySelector('.livebar').classList.contains('on'), 'and is shown as live');
+    conn.send({ state: 'live', ts: 1, targets: [{ id: 9, type: 0, col: 7, row: 10 }] });
+    eq(root.querySelectorAll('.map .live circle.person').length, 1, 'a push draws its dot');
+    card._liveAt = Date.now() - 6000;
+    card._drawLive();
+    eq(root.querySelector('.livebar').textContent, 'Live · nobody in view',
+      'a stream that went quiet is an empty room, not a warning');
+    ok(root.querySelector('.livebar').classList.contains('on'), 'and stays live');
+    eq(root.querySelectorAll('.map .live circle').length, 0,
+      'and the last dots are taken off the map');
+    card.remove();
+  }
+  {
     const conn = fakeConnection(true);
     const { root, leases } = mount(undefined, conn);
     await Promise.resolve();

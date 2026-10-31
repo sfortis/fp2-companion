@@ -44,7 +44,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.10.0';
+const CARD_VERSION = '1.11.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -118,7 +118,6 @@ const DEFAULTS = {
       stopped: 'Live view stopped',
       no_session: 'Live view needs a sign-in',
       refused: 'No live view on this account',
-      stale: 'Live view · no data',
       not_admin: 'Live view needs an admin user',
     },
     interference: 'Interference',
@@ -337,13 +336,11 @@ button.arm { background: var(--error-color, #f44336);
 .map .live .person { fill: #ff5252; stroke: #fff; stroke-width: 1; }
 .map .live .ghost { fill: none; stroke: var(--secondary-text-color);
   stroke-width: 1; stroke-dasharray: 1.6 1.2; }
-.map .live.stale circle { opacity: .35; }
 /* A person pulses like the live line's dot: a halo under the dot that grows
  * and fades. It scales about its own centre, so it follows the dot as the
  * dot glides. */
 .map .live .halo { fill: #ff5252; stroke: none; transform-box: fill-box;
                    transform-origin: center; animation: dothalo 1.6s ease-out infinite; }
-.map .live.stale .halo { animation: none; opacity: 0; }
 @keyframes dothalo {
   0% { transform: scale(1); opacity: .55; }
   80%, 100% { transform: scale(2.8); opacity: 0; }
@@ -986,9 +983,12 @@ class Fp2CompanionCard extends HTMLElement {
     const r = this._refs;
     const t = this._config.text.live;
     const msg = this._liveMsg;
+    /* The FP2 sends no push while it tracks nobody, so "watching" (subscribed,
+     * no push yet) and a stream that went quiet both mean an empty room. */
     const stale = msg && msg.state === 'live'
       && Date.now() - this._liveAt > LIVE_STALE_MS;
-    const targets = msg && msg.state === 'live' && Array.isArray(msg.targets)
+    const live = msg && (msg.state === 'watching' || msg.state === 'live');
+    const targets = live && !stale && Array.isArray(msg.targets)
       ? msg.targets : [];
     if (r && r.liveBar) {
       let text = '';
@@ -996,10 +996,7 @@ class Fp2CompanionCard extends HTMLElement {
       if (this._liveNotAdmin) {
         text = t.not_admin;
         level = 'warn';
-      } else if (stale) {
-        text = t.stale;
-        level = 'warn';
-      } else if (msg && msg.state === 'live') {
+      } else if (live) {
         const people = targets.filter((tg) => Number(tg.type) !== 1).length;
         const ghosts = targets.length - people;
         text = people === 0 ? t.nobody : (people === 1 ? t.one : tpl(t.many, { n: people }));
@@ -1017,7 +1014,6 @@ class Fp2CompanionCard extends HTMLElement {
     }
     const layer = this._liveLayer;
     if (!layer || !layer.isConnected) return;
-    layer.setAttribute('class', `live${stale ? ' stale' : ''}`);
     const grid = (this._za && this._za.grid) || DEFAULT_GRID;
     const seen = new Set();
     targets.forEach((tg) => {

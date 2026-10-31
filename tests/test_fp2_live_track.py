@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent
 import live_track  # noqa: E402
 from aqara_cloud import AqaraAuthError, AqaraError  # noqa: E402
 from live_track import (LIVE_NO_SESSION, LIVE_ON, LIVE_REFUSED,  # noqa: E402
-                        LIVE_RETRYING, LIVE_STOPPED, LiveTracker, live_targets,
-                        positions_from, to_grid)
+                        LIVE_RETRYING, LIVE_STOPPED, LIVE_WATCHING, LiveTracker,
+                        live_targets, positions_from, to_grid)
 
 DID = "lumi1.54ef44a1b2c3"
 OTHER = "lumi1.54ef44d4e5f6"
@@ -105,6 +105,20 @@ def test_a_lease_runs_out_unless_renewed():
     assert t.watched() == {DID}
     clock.now += 10
     assert t.watched() == set()
+
+
+def test_a_tab_that_joins_a_watched_device_gets_its_state_again():
+    """An empty room sends no push, so without this a second tab would wait
+    on "starting" for as long as nobody walks in."""
+    t, published, _ = tracker()
+    t.lease(DID, "tab-1")
+    t._emit(DID, {"state": LIVE_WATCHING})
+    t._emit(DID, {"state": LIVE_ON, "ts": 1, "targets": []})
+    del published[:]
+    t.lease(DID, "tab-1")
+    assert published == [], "a renewal is not a new tab"
+    t.lease(DID, "tab-2")
+    assert published == [(DID, {"state": LIVE_WATCHING})]
 
 
 def test_one_tab_closing_does_not_stop_another():
@@ -213,6 +227,9 @@ def test_a_watched_device_is_subscribed_with_the_socket_key_and_published():
     live = [m for d, m in published if m["state"] == LIVE_ON]
     # The other FP2's push is not this socket's business.
     assert len(live) == 1 and published[1][0] == DID
+    states = [m["state"] for d, m in published]
+    assert states[:3] == ["starting", LIVE_WATCHING, LIVE_ON], \
+        "watching once subscribed, before any push"
     assert live[0]["ts"] == 1793382792080
     assert live[0]["targets"][0]["zone"] == 2
     assert published[-1] == (DID, {"state": LIVE_STOPPED})
@@ -235,6 +252,17 @@ def test_the_subscription_is_renewed_every_five_minutes():
     run(t)
     assert kinds(cloud)[:4] == ["push_socket", "subscribe", "unsubscribe",
                                 "subscribe"]
+
+
+def test_watching_is_sent_once_and_not_on_each_renewal():
+    """A renewal must not tell a card full of dots that the room is empty."""
+    clock = Clock()
+    t, published, cloud = tracker(clock, sockets=[[HELLO, push(DID), 301,
+                                                   push(DID)]])
+    t.lease(DID, "tab-1", 10_000)
+    run(t)
+    assert kinds(cloud).count("subscribe") == 2
+    assert [m["state"] for d, m in published].count(LIVE_WATCHING) == 1
 
 
 def test_a_device_the_account_cannot_see_is_refused_alone():

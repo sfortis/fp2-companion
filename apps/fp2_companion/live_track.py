@@ -55,6 +55,9 @@ TARGET_INTERFERENCE = 1
 
 # What the `state` field of a published message says.
 LIVE_STARTING = "starting"
+# Subscribed and waiting for the FP2. It sends no position pushes while it
+# tracks nobody, so this is also what an empty room looks like (2026-10-31).
+LIVE_WATCHING = "watching"
 LIVE_ON = "live"
 LIVE_STOPPED = "stopped"
 LIVE_RETRYING = "retrying"
@@ -173,16 +176,23 @@ class LiveTracker:
         self._http = None
         self._out = None
         self._beats = {}
+        self._last_state = {}      # did -> the last message that was not a push
 
     # ---------- what the app calls, from any thread ----------
     def lease(self, did, client, seconds=LEASE_SECONDS):
         with self._guard:
             fresh = not self._live_clients(did)
-            self._leases.setdefault(did, {})[str(client)] = (
-                self._clock() + seconds)
+            clients = self._leases.setdefault(did, {})
+            joined = str(client) not in clients
+            clients[str(client)] = self._clock() + seconds
         self._ensure_running()
         if fresh:
             self._emit(did, {"state": LIVE_STARTING})
+        elif joined and did in self._last_state:
+            # A card that opens on a device already being watched gets the
+            # state again, or it waits for a push that an empty room never
+            # sends.
+            self._emit(did, self._last_state[did])
 
     def release(self, did, client):
         """A card that closed. The device stops at the next tick when that
@@ -256,6 +266,8 @@ class LiveTracker:
             self._runner = asyncio.ensure_future(self.run())
 
     def _emit(self, did, message):
+        if message.get("state") != LIVE_ON:
+            self._last_state[did] = message
         if self._out is not None:
             self._out.submit(self._safe_publish, did, message)
         else:
@@ -377,6 +389,8 @@ class LiveTracker:
                 with self._guard:
                     self._leases.pop(did, None)
                 continue
+            if since is None:
+                self._emit(did, {"state": LIVE_WATCHING})
             subscribed[did] = now
         for did in subscribed:
             if now - self._beats.get(did, -VIEW_HEARTBEAT_SECONDS) \

@@ -145,7 +145,10 @@ it pushes anything.
    nothing is pushed either.
 5. Pushes arrive about every 0.75 seconds as
    `[{"result": {"attr": "4.22.700", "subjectId", "timeStamp",
-   "value": "<json>"}}]`.
+   "value": "<json>"}}]`. They arrive only while the FP2 tracks someone.
+   With the room empty, the subscribe and the heartbeat succeed and nothing
+   is pushed. This was observed on 2026-10-31: both FP2s reported no
+   occupancy, and a 75 second subscription received no push.
 6. `POST app/view/unsubscribe` with the same body ends it. The Aqara app
    unsubscribes and subscribes again every 300 seconds.
 
