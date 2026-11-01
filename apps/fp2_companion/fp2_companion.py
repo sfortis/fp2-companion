@@ -41,13 +41,16 @@ from command_topics import CommandTopics
 from live_track import LiveTracker, to_grid
 from regions import COUNTRIES
 from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
-                        ERR_ENTRANCE_LOCKED, ERR_RANGE_ID, LOCKED_REGIONS,
-                        REGION_DETECTION, REGION_EDGE, REGION_ENTRANCE, ROWS,
+                        ERR_ENTRANCE_LOCKED, ERR_NO_BLOCKS, ERR_RANGE_ID,
+                        LOCKED_REGIONS, REGION_DETECTION, REGION_EDGE,
+                        REGION_ENTRANCE, REGION_INTERFERENCE, ROWS,
                         TAG_OTHER_ID, TAG_TYPE_ZONE, ZoneError, apply_tag,
+                        attribute_landed, check_attribute_change,
                         created_zone, list_backups, new_zone, parse_tags,
-                        plan_restore,
-                        prune_backups, read_backup, same_layout, validate_zone,
-                        wire_zone, write_backup, zone_landed, zones_differ)
+                        plan_restore, prune_backups, read_backup, same_layout,
+                        validate_zone, wire_zone, with_attribute,
+                        without_blocks_of, write_backup, zone_landed,
+                        zones_differ)
 
 STATE_DIR = "/share/appdaemon/fp2_companion"
 SESSION_FILE = f"{STATE_DIR}/session.json"
@@ -60,6 +63,9 @@ KIND_EDIT = "edit"
 KIND_CREATE = "create"
 KIND_DELETE = "delete"
 KIND_RESTORE = "restore"
+# An edit that changes the zone's attribute, after which the server gives it a
+# new rangeId, so its readback finds it by attribute and blocks.
+KIND_ATTRIBUTE = "attribute"
 
 SENSITIVITY_LABELS = {"1": "Low", "2": "Medium", "3": "High"}
 APPROACH_LABELS = {"0": "Far", "1": "Middle", "2": "Close"}
@@ -394,6 +400,10 @@ class Fp2Device:
             try:
                 before = self.cloud.list_zones()
                 zone = self._build_zone(kind, request, before)
+                if kind == KIND_EDIT and zone["regionType"] != next(
+                        z.get("regionType") for z in before
+                        if z.get("rangeId") == zone.get("rangeId")):
+                    kind = KIND_ATTRIBUTE
                 validate_zone(zone, did, new=kind == KIND_CREATE)
                 self._backup_before(before, "before-write")
                 self.cloud.set_zone(wire_zone(zone, new=kind == KIND_CREATE))
@@ -430,30 +440,55 @@ class Fp2Device:
                         if z.get("rangeId") == request.get("rangeId")), None)
         if current is None:
             raise ZoneError(ERR_RANGE_ID, f"no zone {request.get('rangeId')}")
-        if current.get("regionType") == REGION_ENTRANCE:
-            # No write of an entrance zone was captured (PR #1, 2026-10-31).
-            raise ZoneError(ERR_ENTRANCE_LOCKED,
-                            f"{current.get('name')} is an entrance zone, "
-                            "which is not written")
+        region = current.get("regionType")
+        if request.get("regionType", region) != region:
+            return self._with_attribute(current, request, before)
         zone = dict(current)
-        if current.get("regionType") == REGION_EDGE:
-            # The Aqara app redraws the edge and changes nothing else on it
-            # (captured 2026-10-31), so a request that changes anything else
-            # is refused whole.
+        if region in (REGION_EDGE, REGION_ENTRANCE):
+            # The Aqara app redraws the edge and the entrance zone and changes
+            # nothing else on them (captured 2026-10-31 and 2026-11-01), so a
+            # request that changes anything else is refused whole.
             changed = [f for f in ("name", "sensitivity", "tagId")
                        if f in request and request[f] != current.get(f)]
             if changed:
-                raise ZoneError(ERR_EDGE_LOCKED,
-                                f"only the edge's blocks change, not "
-                                f"{', '.join(changed)}")
+                code = (ERR_EDGE_LOCKED if region == REGION_EDGE
+                        else ERR_ENTRANCE_LOCKED)
+                raise ZoneError(code, f"only the blocks of {current.get('name')} "
+                                      f"change, not {', '.join(changed)}")
             if "blockList" in request:
                 zone["blockList"] = request["blockList"]
-            return zone
+            return self._entrance_blocks(zone, before)
         for field in ("name", "blockList", "sensitivity"):
             if field in request:
                 zone[field] = request[field]
         if "tagId" in request:
             apply_tag(zone, request["tagId"], self.app.zone_tags)
+        return zone
+
+    def _with_attribute(self, current, request, before):
+        """The zone `current` with the attribute the card asked for, shaped
+        as the Aqara app sends that change (zone_model.with_attribute)."""
+        region = request["regionType"]
+        check_attribute_change(current, region, before)
+        zone = with_attribute(current, region, request.get("name"),
+                              request.get("sensitivity", 1))
+        if "blockList" in request:
+            zone["blockList"] = request["blockList"]
+        if (region == REGION_DETECTION
+                and request.get("tagId") not in (None, TAG_OTHER_ID)):
+            apply_tag(zone, request["tagId"], self.app.zone_tags)
+        return self._entrance_blocks(zone, before)
+
+    @staticmethod
+    def _entrance_blocks(zone, before):
+        """An entrance zone without the interference zone's blocks, which the
+        Aqara app leaves out before it sends one (captured 2026-11-01)."""
+        if zone.get("regionType") != REGION_ENTRANCE:
+            return zone
+        zone["blockList"] = without_blocks_of(zone, REGION_INTERFERENCE, before)
+        if not zone["blockList"]:
+            raise ZoneError(ERR_NO_BLOCKS, "every block of the entrance zone "
+                                           "is in the interference zone")
         return zone
 
     def _zone_delete(self, payload):
@@ -489,10 +524,12 @@ class Fp2Device:
 
         Changed zones are rewritten in place, zones the backup lacks are
         deleted, and zones the device lacks are created again, which gives
-        them new ids. A restore that would have to create or delete the
-        interference zone or the edge is refused whole, for the same reason
-        a create of one is. Their blocks are restored like any other zone's.
-        An entrance zone is left as the device holds it.
+        them new ids. An entrance zone or edge that appeared or went away
+        since the backup is put back by changing the attribute of the zone
+        that shares the most blocks with it (zone_model.plan_restore). A
+        restore that would have to create or delete the interference zone,
+        an entrance zone or the edge is refused whole, for the same reason a
+        create of one is.
         """
         folder = self.info["backup_dir"]
         with self.app.lock:
@@ -509,16 +546,22 @@ class Fp2Device:
                     raise ZoneError(locked, "the restore would create or "
                                             "delete the interference zone "
                                             "or the edge")
-                if not (plan["update"] or plan["create"] or plan["delete"]):
+                converts = plan["to_detection"] + plan["to_single"]
+                if not (converts or plan["update"] or plan["create"]
+                        or plan["delete"]):
                     self.app.log(f"restore {name}: the zones already match")
                     self._set_status(STATUS_OK)
                     return
                 did = self.info["did"]
-                for zone in plan["update"]:
+                for zone in [z for _r, z in converts] + plan["update"]:
                     validate_zone(zone, did)
                 for zone in plan["create"]:
                     validate_zone(zone, did, new=True)
                 self._backup_before(before, "before-restore")
+                # An entrance zone or edge becomes detection first, so its
+                # attribute is free before another zone takes it.
+                for _rid, zone in converts:
+                    self.cloud.set_zone(wire_zone(zone))
                 for zone in plan["update"]:
                     self.cloud.set_zone(wire_zone(zone))
                 if plan["delete"]:
@@ -543,7 +586,8 @@ class Fp2Device:
                 self._cloud_failed(exc)
                 self.app.run_in(self.read_all, WRITE_SETTLE_SECONDS)
                 return
-        self.app.log(f"restore {name}: {len(plan['update'])} rewritten, "
+        self.app.log(f"restore {name}: {len(converts)} changed attribute, "
+                 f"{len(plan['update'])} rewritten, "
                  f"{len(plan['delete'])} deleted, {len(plan['create'])} "
                  "created")
         self.app.run_in(self._verify_zone, WRITE_SETTLE_SECONDS,
@@ -570,6 +614,8 @@ class Fp2Device:
         kind, zone, before = kwargs["kind"], kwargs["zone"], kwargs["before"]
         if kind == KIND_EDIT:
             landed = zone_landed(zone, self.zones)
+        elif kind == KIND_ATTRIBUTE:
+            landed = attribute_landed(zone, self.zones) is not None
         elif kind == KIND_CREATE:
             landed = created_zone(zone, before, self.zones) is not None
         elif kind == KIND_DELETE:

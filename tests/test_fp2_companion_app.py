@@ -112,8 +112,20 @@ class FakeCloud:
             z["tagId"] = z["tagId"] or "custom_Other"
             self.zones.append(z)
         else:
-            self.zones = [{**r, **z} if r["rangeId"] == z["rangeId"] else r
-                          for r in self.zones]
+            old = next(r for r in self.zones if r["rangeId"] == z["rangeId"])
+            new = {**old, **z}
+            if old["regionType"] != z["regionType"]:
+                # A change of attribute renumbers the zone, as on 2026-11-01:
+                # 100 plus the regionType for an entrance or edge, the next
+                # free id for detection. An entrance came back with an empty
+                # tag.
+                if z["regionType"] == 0:
+                    new["rangeId"] = max([r["rangeId"] for r in self.zones
+                                          if r["rangeId"] < 100] + [0]) + 1
+                else:
+                    new["rangeId"] = 100 + z["regionType"]
+                    new.update(tagId="custom_", tagName="")
+            self.zones = [new if r is old else r for r in self.zones]
 
     def delete_zones(self, ids):
         if getattr(self, "refuse_delete", False):
@@ -610,23 +622,51 @@ def test_a_restore_redraws_the_edge_and_refuses_to_remove_it(fp2):
 
 def with_entrance(fp2):
     app, world = fp2()
-    app.cloud_fake.zones.append(zone(4, "Front door", 2, 1, [300, 301]))
+    app.cloud_fake.zones.append(zone(102, "Exits and Entrances", 2, 3,
+                                     [300, 301]))
     app.start()
     return app, world
 
 
-def test_an_entrance_zone_is_never_edited(fp2):
-    """regionType 2, reported on a PS-T02E in PR #1. No write of it was
-    captured, so the app reads it and never writes it."""
+def test_an_entrance_zone_is_redrawn_with_the_six_fields_the_aqara_app_sends(fp2):
+    """regionType 2. The Aqara app redraws it with the six fields it sends for
+    the edge, and no sensitivity or tag (captured 2026-11-01)."""
     app, world = with_entrance(fp2)
-    cmd(app, "zone_set", json.dumps({"rangeId": 4, "blockList": [300]}))
+    cmd(app, "zone_set", json.dumps({"rangeId": 102, "blockList": [300]}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sorted(sent) == sorted(["deviceId", "blockList", "colorId", "name",
+                                   "rangeId", "regionType"])
+    assert sent["blockList"] == [300] and sent["regionType"] == 2
+    fire(world)
+    assert status(world) == "ok"
+
+
+@pytest.mark.parametrize("change", [{"name": "Door"}, {"sensitivity": 1},
+                                    {"tagId": "3.6"}])
+def test_only_the_entrance_zones_blocks_change(fp2, change):
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 102, "blockList": [300],
+                                     **change}))
     assert app.cloud_fake.zone_writes == []
     assert refusal_code(world) == "entrance_locked"
 
 
+def test_an_entrance_zone_leaves_out_the_interference_zones_blocks(fp2):
+    """The Aqara app dropped block 90, the interference zone's only block,
+    from the entrance zone it sent on 2026-11-01."""
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 102,
+                                     "blockList": [300, 273, 301]}))
+    assert app.cloud_fake.zone_writes[-1]["blockList"] == [300, 301]
+    app.cloud_fake.zone_writes.clear()
+    cmd(app, "zone_set", json.dumps({"rangeId": 102, "blockList": [273]}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "no_blocks"
+
+
 def test_an_entrance_zone_is_never_deleted_or_created(fp2):
     app, world = with_entrance(fp2)
-    cmd(app, "zone_delete", "4")
+    cmd(app, "zone_delete", "102")
     assert app.cloud_fake.deletes == []
     assert refusal_code(world) == "entrance_locked"
     cmd(app, "zone_set", json.dumps({"name": "Door", "blockList": [1],
@@ -635,24 +675,121 @@ def test_an_entrance_zone_is_never_deleted_or_created(fp2):
     assert refusal_code(world) == "entrance_locked"
 
 
-def test_a_restore_leaves_an_entrance_zone_as_the_device_holds_it(fp2):
+def test_a_restore_redraws_the_entrance_zone(fp2):
     app, world = with_entrance(fp2)
     first = zone_attrs(world)["backups"][0]["name"]
     cloud = app.cloud_fake
     for z in cloud.zones:
-        if z["rangeId"] == 4:
+        if z["rangeId"] == 102:
             z["blockList"] = [310]
-        if z["rangeId"] == 3:
-            z["blockList"] = [43]
     cmd(app, "restore", first)
-    assert [w["rangeId"] for w in cloud.zone_writes] == [3]
+    sent = cloud.zone_writes[-1]
+    assert sent["rangeId"] == 102 and sent["blockList"] == [300, 301]
+    assert "sensitivity" not in sent
     fire(world)
     assert status(world) == "ok"
-    cloud.zone_writes.clear()
-    cloud.zones = [z for z in cloud.zones if z["rangeId"] != 4]
-    cmd(app, "restore", first)
-    assert cloud.zone_writes == [] and cloud.deletes == []
+
+
+# ---------------------------------------------------------------- attributes
+def test_a_detection_zone_becomes_the_entrance_zone(fp2):
+    """As on 2026-11-01: six fields, the zone's own id, the name the Aqara app
+    gives the attribute. The server moves it to 102."""
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "regionType": 2,
+                                     "blockList": [43, 44, 45]}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sent == {"deviceId": DID, "blockList": [43, 44, 45], "colorId": 0,
+                    "name": "Exits and Entrances", "rangeId": 3,
+                    "regionType": 2}
+    fire(world)
     assert status(world) == "ok"
+    assert [z["rangeId"] for z in zone_attrs(world)["zones"]
+            if z["regionType"] == 2] == [102]
+
+
+def test_the_edge_becomes_a_detection_zone(fp2):
+    """As on 2026-11-01: every detection field, the edge's own id 103, the
+    type Other as custom_. The server gives it the next detection id."""
+    app, world = with_edge(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "regionType": 0,
+                                     "name": "Hall", "sensitivity": 2,
+                                     "blockList": [1, 2, 3]}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sent["rangeId"] == 103 and sent["regionType"] == 0
+    assert (sent["name"], sent["sensitivity"]) == ("Hall", 2)
+    assert (sent["tagId"], sent["tagName"]) == ("custom_", "Other")
+    fire(world)
+    assert status(world) == "ok"
+    hall = [z for z in zone_attrs(world)["zones"] if z["name"] == "Hall"]
+    assert [(z["rangeId"], z["regionType"]) for z in hall] == [(4, 0)]
+
+
+def test_an_attribute_another_zone_holds_is_refused(fp2):
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "regionType": 2,
+                                     "blockList": [43]}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "attribute_taken"
+
+
+@pytest.mark.parametrize("rid, region", [(102, 3), (101, 0), (3, 1)])
+def test_an_attribute_changes_only_from_or_to_detection(fp2, rid, region):
+    """Entrance to edge was never captured, and the interference zone keeps
+    its attribute."""
+    app, world = with_entrance(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": rid, "regionType": region,
+                                     "blockList": [300]}))
+    assert app.cloud_fake.zone_writes == []
+    assert refusal_code(world) == "attribute_change"
+
+
+def test_a_restore_turns_an_entrance_zone_back_into_its_detection_zone(fp2):
+    app, world = fp2()
+    app.start()
+    first = zone_attrs(world)["backups"][0]["name"]
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "regionType": 2,
+                                     "blockList": [43, 44, 45]}))
+    fire(world)
+    cloud = app.cloud_fake
+    assert 102 in [z["rangeId"] for z in cloud.zones]
+    cloud.zone_writes.clear()
+    cmd(app, "restore", first)
+    sent = cloud.zone_writes[0]
+    assert (sent["rangeId"], sent["regionType"], sent["name"]) == (102, 0, "Couch")
+    assert sent["sensitivity"] == 2 and cloud.deletes == []
+    fire(world)
+    assert status(world) == "ok"
+    assert not [z for z in cloud.zones if z["regionType"] == 2]
+
+
+def test_a_restore_turns_a_detection_zone_back_into_the_entrance_zone(fp2):
+    app, world = with_entrance(fp2)
+    first = zone_attrs(world)["backups"][0]["name"]
+    cmd(app, "zone_set", json.dumps({"rangeId": 102, "regionType": 0,
+                                     "name": "Door", "sensitivity": 3,
+                                     "blockList": [300, 301]}))
+    fire(world)
+    cloud = app.cloud_fake
+    door = next(z for z in cloud.zones if z["name"] == "Door")
+    cloud.zone_writes.clear()
+    cmd(app, "restore", first)
+    sent = cloud.zone_writes[0]
+    assert (sent["rangeId"], sent["regionType"]) == (door["rangeId"], 2)
+    assert cloud.deletes == []
+    fire(world)
+    assert status(world) == "ok"
+    assert [z["rangeId"] for z in cloud.zones if z["regionType"] == 2] == [102]
+
+
+def test_a_restore_that_would_delete_the_entrance_zone_is_refused(fp2):
+    app, world = fp2()
+    app.start()
+    first = zone_attrs(world)["backups"][0]["name"]
+    app.cloud_fake.zones.append(zone(102, "Exits and Entrances", 2, 3, [300]))
+    cmd(app, "restore", first)
+    assert app.cloud_fake.zone_writes == [] and app.cloud_fake.deletes == []
+    assert refusal_code(world) == "entrance_locked"
 
 
 def test_the_interference_zone_can_be_redrawn(fp2):
@@ -660,7 +797,11 @@ def test_the_interference_zone_can_be_redrawn(fp2):
     app.start()
     cmd(app, "zone_set", json.dumps({"rangeId": 101,
                                      "blockList": [273, 274, 275]}))
-    assert app.cloud_fake.zone_writes[-1]["regionType"] == 1
+    sent = app.cloud_fake.zone_writes[-1]
+    assert sent["regionType"] == 1
+    # Six fields, as the Aqara app sent the interference zone on 2026-11-01.
+    assert sorted(sent) == sorted(["deviceId", "blockList", "colorId", "name",
+                                   "rangeId", "regionType"])
     fire(world)
     assert status(world) == "ok"
 

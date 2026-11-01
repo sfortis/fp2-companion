@@ -45,7 +45,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.16.0';
+const CARD_VERSION = '1.17.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -134,7 +134,14 @@ const DEFAULTS = {
     new_zone: 'New zone',
     new_zone_name: 'Detection Zone {n}',
     edit_hint: 'Tap or drag on the map to add or remove blocks.',
-    edge_hint: 'Only the blocks of the edge can change. Tap or drag on the map to add or remove them.',
+    edge_hint: 'Tap or drag on the map to add or remove blocks of the edge.',
+    entrance_hint: 'Tap or drag on the map to add or remove blocks. Blocks of the interference zone are left out of an entrance zone.',
+    attribute: 'Attribute',
+    attr_detection: 'Detection zone',
+    attr_entrance: 'Exits and Entrances',
+    attr_edge: 'Boundary',
+    attr_taken: '{attr} (used by {zone})',
+    attr_change_hint: 'Saving makes this zone the {attr}. Its name, type and sensitivity are not kept.',
     name: 'Name',
     save: 'Save',
     cancel: 'Cancel',
@@ -213,9 +220,8 @@ const NEW_ZONE_COLOUR = '#ffee58';
 
 const REGION_DETECTION = 0;
 const REGION_INTERFERENCE = 1;
-/* An entrance and exit zone, reported on a PS-T02E in PR #1 (2026-10-31).
- * No write of it was captured from the Aqara app, so the app never writes
- * it and the card offers no Edit for it. */
+/* An entrance and exit zone, "Exits and Entrances" in the Aqara app. Like the
+ * edge, only its blocks and its attribute change (captured 2026-11-01). */
 const REGION_ENTRANCE = 2;
 /* The room's edge: every block OUTSIDE the room, where the FP2 does not look.
  * Read off the live Mancave FP2 on 2026-10-31, whose zone "Edge" covers 288
@@ -1598,17 +1604,14 @@ class Fp2CompanionCard extends HTMLElement {
        * out on the map and can never start an edit by accident. While one
        * zone is being edited the other badges are hidden, because switching
        * would throw the draft away. */
-      const editable = z.regionType !== REGION_ENTRANCE;
-      if (this._edit !== null || !editable) row.appendChild(el('div', ''));
+      if (this._edit !== null) row.appendChild(el('div', ''));
       if (this._edit === null) {
-        if (editable) {
-          const badge = el('button', 'badge', t.edit);
-          badge.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            this._startEdit(z);
-          });
-          row.appendChild(badge);
-        }
+        const badge = el('button', 'badge', t.edit);
+        badge.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this._startEdit(z);
+        });
+        row.appendChild(badge);
         row.addEventListener('click', () => {
           this._focus = this._focus === z.rangeId ? null : z.rangeId;
           this._updateZones();
@@ -1852,8 +1855,9 @@ class Fp2CompanionCard extends HTMLElement {
     if (!e.original) return true;
     const o = e.original;
     const same = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
-    return e.name !== o.name || e.sensitivity !== o.sensitivity
-      || e.tagId !== o.tagId || !same(e.blocks, o.blockList || []);
+    return e.regionType !== o.regionType || e.name !== o.name
+      || e.sensitivity !== o.sensitivity || e.tagId !== o.tagId
+      || !same(e.blocks, o.blockList || []);
   }
 
   _drawEditor() {
@@ -1861,10 +1865,14 @@ class Fp2CompanionCard extends HTMLElement {
     const t = this._config.text;
     const e = this._edit;
     const interference = e.regionType === REGION_INTERFERENCE;
-    const edge = e.regionType === REGION_EDGE;
+    const detection = e.regionType === REGION_DETECTION;
+    const from = e.original ? e.original.regionType : REGION_DETECTION;
 
-    /* The edge has only its blocks, so it gets no name, type or sensitivity
-     * field and no Delete. */
+    const attribute = this._attributeField();
+    if (attribute) r.editor.appendChild(attribute);
+
+    /* An edge or entrance zone has only its blocks, so it gets no name, type
+     * or sensitivity field and no Delete. */
     const nameRow = el('div', 'field');
     nameRow.appendChild(el('label', '', t.name));
     const name = el('input', '');
@@ -1879,11 +1887,11 @@ class Fp2CompanionCard extends HTMLElement {
       this._refreshEditor();
     });
     nameRow.appendChild(name);
-    if (!edge) r.editor.appendChild(nameRow);
+    if (detection || interference) r.editor.appendChild(nameRow);
 
-    if (e.regionType === REGION_DETECTION) r.editor.appendChild(this._typeField());
+    if (detection) r.editor.appendChild(this._typeField());
 
-    if (!interference && !edge) {
+    if (detection) {
       const sensRow = el('div', 'field');
       sensRow.appendChild(el('label', '', t.sensitivity));
       const seg = el('div', 'seg');
@@ -1915,7 +1923,7 @@ class Fp2CompanionCard extends HTMLElement {
     cancel.addEventListener('click', () => this._cancelEdit());
     btns.appendChild(cancel);
     btns.appendChild(el('span', 'spacer'));
-    if (e.rangeId !== null && !interference && !edge) {
+    if (e.rangeId !== null && detection && from === REGION_DETECTION) {
       btns.appendChild(armedButton(t.delete, t.confirm, () => {
         this._command('zone_delete', String(e.rangeId));
         this._sent();
@@ -1923,6 +1931,55 @@ class Fp2CompanionCard extends HTMLElement {
     }
     r.editor.appendChild(btns);
     this._refreshEditor();
+  }
+
+  /* The zone's attribute, as the Aqara app's editor offers it. A zone changes
+   * from or to detection only; entrance to edge was never captured. An
+   * entrance or edge attribute another zone holds is disabled and names that
+   * zone: the Aqara app never converts a second zone into one (2026-11-01).
+   * The interference zone and a new zone get no attribute field. */
+  _attributeField() {
+    const t = this._config.text;
+    const e = this._edit;
+    const o = e.original;
+    const attrs = [REGION_DETECTION, REGION_ENTRANCE, REGION_EDGE];
+    if (!o || !attrs.includes(o.regionType)) return null;
+    const names = { [REGION_DETECTION]: t.attr_detection,
+      [REGION_ENTRANCE]: t.attr_entrance, [REGION_EDGE]: t.attr_edge };
+    const zones = (this._za && this._za.zones) || [];
+    const row = el('div', 'field');
+    row.appendChild(el('label', '', t.attribute));
+    const pick = el('select', '');
+    attrs.forEach((region) => {
+      const holder = region === REGION_DETECTION ? null
+        : zones.find((z) => z.regionType === region && z.rangeId !== e.rangeId);
+      const label = holder ? tpl(t.attr_taken, { attr: names[region], zone: holder.name })
+        : names[region];
+      const opt = el('option', '', label);
+      opt.value = String(region);
+      opt.disabled = region !== o.regionType && (Boolean(holder)
+        || (region !== REGION_DETECTION && o.regionType !== REGION_DETECTION));
+      if (region === e.regionType) {
+        opt.selected = true;
+        opt.setAttribute('selected', '');
+      }
+      pick.appendChild(opt);
+    });
+    pick.addEventListener('change', () => {
+      const region = Number(pick.value);
+      e.regionType = region;
+      if (region === o.regionType) {
+        Object.assign(e, { name: o.name, sensitivity: o.sensitivity, tagId: o.tagId });
+      } else if (region === REGION_DETECTION) {
+        const n = zones.filter((z) => z.regionType === REGION_DETECTION).length + 1;
+        Object.assign(e, { name: tpl(t.new_zone_name, { n }), sensitivity: 1,
+          tagId: TAG_OTHER });
+      }
+      this._zonesKey = null;
+      this._updateZones();
+    });
+    row.appendChild(pick);
+    return row;
   }
 
   /* The zone's type, from the catalogue the app reads from the Aqara cloud:
@@ -1972,18 +2029,34 @@ class Fp2CompanionCard extends HTMLElement {
     const e = this._edit;
     if (!e || !this._editInfo) return;
     const t = this._config.text;
-    this._editInfo.textContent = e.regionType === REGION_EDGE ? t.edge_hint : t.edit_hint;
+    const from = e.original ? e.original.regionType : REGION_DETECTION;
+    const names = { [REGION_ENTRANCE]: t.attr_entrance, [REGION_EDGE]: t.attr_edge };
+    if (e.regionType !== from && names[e.regionType]) {
+      this._editInfo.textContent = tpl(t.attr_change_hint, { attr: names[e.regionType] });
+    } else if (e.regionType === REGION_EDGE) {
+      this._editInfo.textContent = t.edge_hint;
+    } else if (e.regionType === REGION_ENTRANCE) {
+      this._editInfo.textContent = t.entrance_hint;
+    } else {
+      this._editInfo.textContent = t.edit_hint;
+    }
     this._saveBtn.disabled = !e.blocks.length || !e.name.trim() || !this._changed();
   }
 
   _saveEdit() {
     const e = this._edit;
     if (!e || this._saveBtn.disabled) return;
-    const payload = { name: e.name.trim(), blockList: e.blocks.slice() };
-    /* The app takes only the blocks of the edge and refuses anything else. */
-    if (e.regionType === REGION_EDGE) delete payload.name;
-    else if (e.regionType !== REGION_INTERFERENCE) payload.sensitivity = e.sensitivity;
-    if (e.regionType === REGION_DETECTION && e.tagId) payload.tagId = e.tagId;
+    const payload = { blockList: e.blocks.slice() };
+    /* An edge or entrance zone carries only its blocks, and the app refuses
+     * anything else; the interference zone has a name and no sensitivity. */
+    if (e.regionType === REGION_DETECTION || e.regionType === REGION_INTERFERENCE) {
+      payload.name = e.name.trim();
+    }
+    if (e.regionType === REGION_DETECTION) {
+      payload.sensitivity = e.sensitivity;
+      if (e.tagId) payload.tagId = e.tagId;
+    }
+    if (e.original && e.regionType !== e.original.regionType) payload.regionType = e.regionType;
     if (e.rangeId !== null) payload.rangeId = e.rangeId;
     this._command('zone_set', payload);
     this._sent();

@@ -477,8 +477,8 @@ function typePick(root) {
   ok(!editor.querySelector('.seg'), 'and no sensitivity');
   ok(![...editor.querySelectorAll('button')].some((b) => b.textContent === 'Delete'),
     'the edge cannot be deleted');
-  ok(editor.querySelector('.note').textContent.startsWith('Only the blocks of the edge'),
-    'the editor says only the blocks change');
+  ok(editor.querySelector('.note').textContent.includes('blocks of the edge'),
+    'the editor says the blocks of the edge change');
   const save = [...editor.querySelectorAll('button')].find((b) => b.textContent === 'Save');
   ok(save.disabled, 'nothing to save before a block changes');
   const svg = root.querySelector('svg.map');
@@ -494,21 +494,120 @@ function typePick(root) {
   ok(!sent.blockList.includes(135), 'without block 135');
 }
 
-/* An entrance zone (regionType 2, reported on a PS-T02E in PR #1) is shown
- * and labelled, but never offered for editing. */
-{
-  const zones = [ZONES[0],
-    { rangeId: 4, name: 'Front door', regionType: 2, sensitivity: 1, tagId: 'custom_',
-      tagName: '', colorId: 0, blockList: [300, 301] }];
-  const { root } = mount(typedStates(zones));
+function attrPick(root) {
+  const field = [...root.querySelectorAll('.editor .field')]
+    .find((f) => f.querySelector('label').textContent === 'Attribute');
+  return field && field.querySelector('select');
+}
+function choose(select, value) {
+  select.value = String(value);
+  select.dispatchEvent(new dom.window.Event('change'));
+}
+function saveButton(root) {
+  return [...root.querySelectorAll('.editor button')].find((b) => b.textContent === 'Save');
+}
+function editRow(root, name) {
   const rows = [...root.querySelectorAll('.legend .row:not(.head)')];
-  const door = rows.find((r) => r.querySelector('.nm').textContent === 'Front door');
+  rows.find((r) => r.querySelector('.nm').textContent === name).querySelector('.badge').click();
+}
+const ENTRANCE = { rangeId: 102, name: 'Exits and Entrances', regionType: 2, sensitivity: 3,
+  tagId: 'custom_', tagName: '', colorId: 0, blockList: [300, 301] };
+const BOUNDARY = { rangeId: 103, name: 'Boundary', regionType: 3, sensitivity: 1,
+  tagId: 'custom_', tagName: '', colorId: 5, blockList: [1, 2, 3] };
+
+/* An entrance zone (regionType 2) is shown, labelled, and edited like the
+ * edge: its blocks and its attribute, nothing else (captured 2026-11-01). */
+{
+  const zones = [ZONES[0], ENTRANCE];
+  const { root, calls } = mount(typedStates(zones));
+  const rows = [...root.querySelectorAll('.legend .row:not(.head)')];
+  const door = rows.find((r) => r.querySelector('.nm').textContent === 'Exits and Entrances');
   eq(door.querySelector('.type').textContent, 'Entrance', 'the legend names an entrance zone');
   eq(door.querySelector('.sens').textContent, '', 'with no sensitivity');
-  ok(!door.querySelector('.badge'), 'and no Edit button');
+  ok(door.querySelector('.badge'), 'and an Edit button');
   eq(door.children.length, rows[0].children.length, 'its row keeps the columns');
-  ok([...root.querySelectorAll('svg.map text.label')].some((l) => l.textContent === 'Front door'),
+  ok([...root.querySelectorAll('svg.map text.label')].some((l) => l.textContent === 'Exits and Entrances'),
     'it is labelled on the map');
+  editRow(root, 'Exits and Entrances');
+  const editor = root.querySelector('.editor');
+  ok(!editor.querySelector('input') && !typePick(root) && !editor.querySelector('.seg'),
+    'an entrance zone has no name, type or sensitivity field');
+  ok(!saveButton(root).parentNode.textContent.includes('Delete'), 'and no Delete');
+  ok(editor.querySelector('.note').textContent.includes('interference zone'),
+    'the editor says the interference blocks are left out');
+  const pick = attrPick(root);
+  eq(pick.value, '2', 'its attribute is Exits and Entrances');
+  const boundary = [...pick.options].find((o) => o.value === '3');
+  ok(boundary.disabled, 'it cannot become the edge directly');
+  const svg = root.querySelector('svg.map');
+  ev(svg.querySelector('rect.hit[data-block="301"]'), 'pointerdown');
+  ev(svg, 'pointerup');
+  saveButton(root).click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(Object.keys(sent).sort().join(','), 'blockList,rangeId', 'it is saved with its blocks and id only');
+  eq(sent.blockList.join(','), '300', 'without the block taken out');
+}
+
+/* A detection zone becomes the entrance zone; an attribute another zone
+ * holds is disabled and names that zone. */
+{
+  const { root, calls } = mount(typedStates([ZONES[0], ZONES[1], BOUNDARY]));
+  editRow(root, 'Couch');
+  const pick = attrPick(root);
+  eq(pick.value, '0', 'a detection zone shows its attribute');
+  const edge = [...pick.options].find((o) => o.value === '3');
+  ok(edge.disabled && edge.textContent === 'Boundary (used by Boundary)',
+    'the edge another zone holds is disabled and named');
+  ok(![...pick.options].find((o) => o.value === '2').disabled, 'the free entrance is offered');
+  choose(pick, 2);
+  const editor = root.querySelector('.editor');
+  ok(!editor.querySelector('input') && !typePick(root) && !editor.querySelector('.seg'),
+    'as an entrance zone it loses the name, type and sensitivity fields');
+  ok(editor.querySelector('.note').textContent.startsWith('Saving makes this zone the Exits and Entrances'),
+    'the editor says what saving does');
+  eq(attrPick(root).value, '2', 'the choice is kept across the redraw');
+  ok(!saveButton(root).disabled, 'a new attribute alone is a change');
+  saveButton(root).click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(Object.keys(sent).sort().join(','), 'blockList,rangeId,regionType',
+    'it is saved with its blocks, id and new attribute');
+  eq(sent.regionType, 2, 'as an entrance zone');
+}
+
+/* The edge becomes a detection zone, with a name, type and sensitivity. */
+{
+  const { root, calls } = mount(typedStates([ZONES[0], BOUNDARY]));
+  editRow(root, 'Boundary');
+  choose(attrPick(root), 0);
+  const name = root.querySelector('.editor input');
+  ok(name, 'a detection zone has a name field');
+  eq(name.value, 'Detection Zone 2', 'named as a new zone would be');
+  ok(typePick(root) && root.querySelector('.editor .seg'), 'and a type and a sensitivity');
+  ok(![...root.querySelectorAll('.editor button')].some((b) => b.textContent === 'Delete'),
+    'it is not deleted while it is still the edge');
+  saveButton(root).click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(sent.regionType, 0, 'saved as detection');
+  eq(sent.name, 'Detection Zone 2', 'with its name');
+  eq(sent.sensitivity, 1, 'and sensitivity 1');
+  eq(sent.rangeId, 103, 'under the id it still has');
+}
+
+/* Back to its own attribute, nothing has changed. */
+{
+  const { root } = mount(typedStates([ZONES[0], BOUNDARY]));
+  editRow(root, 'Couch');
+  choose(attrPick(root), 2);
+  choose(attrPick(root), 0);
+  eq(root.querySelector('.editor input').value, 'Couch', 'its own name comes back');
+  ok(saveButton(root).disabled, 'and there is nothing to save');
+}
+
+/* The interference zone keeps its attribute, so it gets no such field. */
+{
+  const { root } = mount(typedStates(ZONES));
+  editRow(root, 'Interference source');
+  ok(!attrPick(root), 'the interference zone has no attribute field');
 }
 
 /* ---------- previewing and restoring a backup ---------- */

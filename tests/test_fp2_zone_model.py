@@ -125,7 +125,7 @@ def test_every_live_zone_is_valid():
     (lambda z: z.update(blockList=[43, 321]), ERR_BAD_BLOCK),
     (lambda z: z.update(blockList=[43, "44"]), ERR_BAD_BLOCK),
     (lambda z: z.update(blockList=[43, 43]), ERR_DUPLICATE_BLOCK),
-    (lambda z: z.update(regionType=2), ERR_BAD_REGION),
+    (lambda z: z.update(regionType=4), ERR_BAD_REGION),
     (lambda z: z.update(sensitivity=4), ERR_BAD_SENSITIVITY),
     (lambda z: z.update(sensitivity="2"), ERR_BAD_SENSITIVITY),
     (lambda z: z.update(name="  "), ERR_BAD_NAME),
@@ -264,7 +264,8 @@ def test_no_new_zone_means_the_create_did_not_land():
 
 def test_restoring_the_current_state_sends_nothing():
     assert plan_restore(LIVE, [fresh(z) for z in LIVE]) == {
-        "update": [], "create": [], "delete": []}
+        "to_detection": [], "to_single": [], "update": [], "create": [],
+        "delete": []}
 
 
 def test_a_restore_rewrites_changed_zones_in_place():
@@ -393,3 +394,47 @@ def test_a_backup_keeps_the_edges_sensitivity_and_tag(tmp_path):
     name = write_backup(str(tmp_path), [EDGE], 1793350000, "test")
     kept = read_backup(str(tmp_path), name)["zones"][0]
     assert kept == EDGE
+
+
+# ---------------------------------------------------------------- attributes
+import zone_model as zm  # noqa: E402
+
+
+def z(rid, name, region, blocks, sens=1):
+    return {"deviceId": DID, "rangeId": rid, "name": name,
+            "regionType": region, "sensitivity": sens, "colorId": 0,
+            "tagId": "custom_", "tagName": "", "blockList": list(blocks)}
+
+
+def test_a_restore_pairs_the_entrance_with_the_zone_sharing_most_blocks():
+    """Two detection zones the device lacks: the entrance zone becomes the
+    one it shares more blocks with, and the other is created."""
+    current = [z(102, "Exits and Entrances", 2, [91, 106, 107])]
+    backup = [z(1, "Desk", 0, [22, 23, 106]), z(2, "Door", 0, [90, 91, 106, 107])]
+    plan = zm.plan_restore(current, backup)
+    assert [(rid, w["name"], w["regionType"]) for rid, w in plan["to_detection"]] == [
+        (102, "Door", 0)]
+    assert [c["name"] for c in plan["create"]] == ["Desk"]
+    assert plan["delete"] == [] and plan["to_single"] == []
+
+
+def test_a_restore_pairs_a_detection_zone_to_become_the_entrance():
+    current = [z(1, "Desk", 0, [22, 23]), z(4, "Door", 0, [91, 106, 107])]
+    backup = [z(1, "Desk", 0, [22, 23]), z(102, "Exits and Entrances", 2, [91, 106])]
+    plan = zm.plan_restore(current, backup)
+    assert [(rid, w["regionType"], w["blockList"]) for rid, w in plan["to_single"]] == [
+        (4, 2, [91, 106])]
+    assert plan["delete"] == [] and plan["update"] == [] and plan["create"] == []
+
+
+def test_the_layout_check_ignores_the_name_the_aqara_app_gives_an_edge():
+    assert zm.same_layout([z(103, "Edge", 3, [1, 2])], [z(103, "Boundary", 3, [2, 1], sens=3)])
+    assert not zm.same_layout([z(103, "Edge", 3, [1, 2])], [z(103, "Edge", 3, [1])])
+    assert not zm.same_layout([z(1, "Desk", 0, [1])], [z(1, "Desk", 0, [1], sens=2)])
+
+
+def test_a_landed_attribute_change_is_found_by_attribute_and_blocks():
+    sent = zm.with_attribute(z(3, "Couch", 0, [43, 44]), zm.REGION_ENTRANCE)
+    after = [z(102, "Exits and Entrances", 2, [44, 43], sens=2)]
+    assert zm.attribute_landed(sent, after)["rangeId"] == 102
+    assert zm.attribute_landed(sent, [z(102, "Exits and Entrances", 2, [43])]) is None
