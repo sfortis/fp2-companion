@@ -119,8 +119,8 @@ entrance and exit, 3 the room's edge), a `sensitivity`, a `tagId` and
 
 A PS-T02E reported an entrance and exit zone on 2026-10-31, and a PS-S02D
 got one on 2026-11-01 when its owner turned a detection zone into one in the
-Aqara app. FP2 Companion reads an entrance and exit zone and never writes it.
-A restore leaves it as the device holds it.
+Aqara app. A device holds at most one entrance and exit zone, one edge and
+one interference zone.
 
 The map is a grid of 16 columns and 20 rows. Block ids run from 1 to 320 in
 row-major order, so a block id is `row * 16 + column + 1` with both counted
@@ -166,8 +166,23 @@ The server renumbers a zone whose attribute changes. Detection zones get
 ids from 1 up, and every other kind gets 100 plus its `regionType`: the
 interference zone is 101, the entrance and exit zone 102 and the edge 103.
 After the changes above a refresh read the edge as 103 again and the former
-zone 2 as 102. FP2 Companion refuses any change of `regionType`, because the
-zone entities and the restore both key on `rangeId`.
+zone 2 as 102.
+
+The Aqara app redraws an entrance and exit zone and an interference zone
+with the same six fields it sends for the edge (captured 2026-11-01).
+
+When a person picks an attribute that another zone already holds, the Aqara
+app warns "This attribute has been configured" and offers Modify. Modify does
+not convert the zone being edited. It opens the zone that holds the
+attribute for editing and drops the unsaved changes, so on 2026-11-01 the
+only writes that followed were to that zone.
+
+FP2 Companion makes the same changes the same way. It changes an attribute
+only from or to detection, because a direct change between an entrance zone
+and the edge was never captured, and it refuses an attribute another zone
+holds. It leaves the interference zone's blocks out of an entrance zone
+before it sends it. After a change it finds the zone again by its attribute,
+name and blocks, since its `rangeId` has changed.
 
 After each `range/set` of a detection zone, an edit or a create, the Aqara
 app writes the resource `4.21N.85` as the number 1, where N is the zone's

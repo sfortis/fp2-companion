@@ -32,8 +32,9 @@ and does not depend on the cloud.
   of each detection zone, the AI person detection switch and the AI learning
   button, all found automatically for every FP2 paired over HomeKit.
 - **Zone editor card:** paint blocks on the 16 by 20 grid, rename zones, set
-  their type and sensitivity, create and delete detection zones, and redraw
-  the interference zone and the room's edge.
+  their type and sensitivity, create and delete detection zones, redraw the
+  interference zone, the entrance zone and the room's edge, and change a
+  zone's attribute between detection, entrance and edge.
 - **Backups:** the zones are backed up whenever they change and before every
   write. Any backup can be previewed on the map and restored.
 - **Live view:** the people and interference sources the FP2 is tracking,
@@ -158,7 +159,8 @@ it works.
 - The card installs its own dashboard resource only when Home Assistant runs
   with a Supervisor (Home Assistant OS or Supervised) and the resources are
   managed in the UI. Otherwise the AppDaemon log names the resource to add.
-- An entrance and exit zone is shown but not edited.
+- A zone changes its attribute only from or to detection. To turn an
+  entrance zone into the edge, make it a detection zone first.
 
 ## Security and Privacy
 

@@ -114,6 +114,17 @@ not depend on the cloud.
     on each command topic, subscribes through the plugin's `mqtt/subscribe`
     service only to a topic whose probe did not come back, and probes
     again. A topic still silent is a warning in the log.
+24. A zone's attribute (detection, entrance and exit, edge) changes from the
+    card the way the Aqara app changes it, as captured on 2026-11-01. Only
+    changes from or to detection are made, because no direct change
+    between an entrance zone and the edge was captured. One entrance zone
+    and one edge per device: an attribute another zone holds is refused,
+    as the Aqara app refuses to convert a second zone. The server renumbers
+    a zone whose attribute changes, so its readback finds it by attribute,
+    name and blocks. A restore puts attributes back too: an entrance zone
+    or edge that appeared or went away since the backup is paired with the
+    detection zone it shares the most blocks with, and that zone's
+    attribute is changed instead of creating or deleting one.
 
 ## Modules
 
