@@ -103,6 +103,7 @@ the number 1.
 | `4.72.85` | AI person detection | 1 on, 0 off |
 | `4.66.85` | Starts AI learning | 1 |
 | `4.22.85` | Device page heartbeat | 1 (a number) |
+| `4.21N.85` | Written after a detection zone write, see Zones | 1 (a number) |
 | `4.22.700` | Live targets | JSON, see below |
 
 While AI person detection is on, the device reports sensitivity as 3 and
@@ -116,9 +117,10 @@ progress in any resource, so the card counts down on its own.
 entrance and exit, 3 the room's edge), a `sensitivity`, a `tagId` and
 `tagName`, a `colorId` and a `blockList`.
 
-A PS-T02E reported an entrance and exit zone on 2026-10-31. No write of one
-has been captured from the Aqara app, so FP2 Companion reads it and never
-writes it. A restore leaves it as the device holds it.
+A PS-T02E reported an entrance and exit zone on 2026-10-31, and a PS-S02D
+got one on 2026-11-01 when its owner turned a detection zone into one in the
+Aqara app. FP2 Companion reads an entrance and exit zone and never writes it.
+A restore leaves it as the device holds it.
 
 The map is a grid of 16 columns and 20 rows. Block ids run from 1 to 320 in
 row-major order, so a block id is `row * 16 + column + 1` with both counted
@@ -136,13 +138,44 @@ OUTSIDE the room, where the FP2 does not look. On 2026-10-31 one FP2 had a
 zone named "Edge" with `rangeId` 103 covering 288 of the 320 blocks; the 32
 it left out formed a 4 by 8 room that held that FP2's other zones.
 
-The Aqara app lets a person redraw the edge's blocks and change nothing else
-on it. On 2026-10-31 it took one block out of that edge with a `range/set`
-that carried six fields: `deviceId`, `rangeId`, `regionType`, `name`,
-`colorId` and `blockList`. It sent no `sensitivity`, `tagId` or `tagName`,
-and the server kept the values the zone already had for those three. FP2
-Companion writes the edge the same way. It refuses to rename the edge, to
-give it a type or a sensitivity, and to create or delete one.
+On 2026-10-31 the Aqara app took one block out of that edge with a
+`range/set` that carried six fields: `deviceId`, `rangeId`, `regionType`,
+`name`, `colorId` and `blockList`. It sent no `sensitivity`, `tagId` or
+`tagName`, and the server kept the values the zone already had for those
+three. FP2 Companion writes the edge the same way. It refuses to rename the
+edge, to give it a type or a sensitivity, and to create or delete one.
+
+The Aqara app also lets a person change a zone's attribute, which is its
+`regionType`. Its zone editor offers Detection zone, Exits and Entrances and
+Boundary, the last being the edge. On 2026-11-01 three changes were captured
+on a PS-S02D:
+
+- The edge became a detection zone with a `range/set` that carried the full
+  detection fields: `regionType` 0, `rangeId` 103, the name "Detection Zone
+  3" chosen by the Aqara app, `tagId` `custom_` with `tagName` "Other", and
+  `sensitivity` 1.
+- That zone went back to the edge with the six edge fields, `regionType` 3
+  and the name "Boundary". The Aqara app sent `rangeId` 3, not 103.
+- Detection zone 2 became an entrance and exit zone with the same six
+  fields, `regionType` 2 and the name "Exits and Entrances". Its blocks had
+  included the interference zone's only block, and the Aqara app left that
+  block out of the request. The server kept the zone's `sensitivity` and set
+  `tagId` to `custom_` with an empty `tagName`.
+
+The server renumbers a zone whose attribute changes. Detection zones get
+ids from 1 up, and every other kind gets 100 plus its `regionType`: the
+interference zone is 101, the entrance and exit zone 102 and the edge 103.
+After the changes above a refresh read the edge as 103 again and the former
+zone 2 as 102. FP2 Companion refuses any change of `regionType`, because the
+zone entities and the restore both key on `rangeId`.
+
+After each `range/set` of a detection zone, an edit or a create, the Aqara
+app writes the resource `4.21N.85` as the number 1, where N is the zone's
+`rangeId`: `4.211.85` after an edit of zone 1, `4.214.85` after creating
+zone 4, and `4.213.85` when the edge became detection zone 3. It writes
+nothing of the kind after an edge write, an entrance write or a delete. The
+captures of 2026-10-30 show the same writes. What the resource does is not
+known, and FP2 Companion does not write it.
 
 A zone's type is a tag. The Aqara app fills its type list from
 `GET app/tag/bottom/list?tagType=9`. On 2026-10-31 that returned 30 tags,
