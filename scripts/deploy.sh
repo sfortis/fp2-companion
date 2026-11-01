@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Deploy fp2_companion and its card to a Home Assistant OS host over SSH.
+# Deploy fp2_companion to a Home Assistant OS host over SSH.
 #
-#   scripts/deploy.sh          # the app and the card
-#   scripts/deploy.sh app      # the app only
-#   scripts/deploy.sh card     # the card only
+#   scripts/deploy.sh
+#
+# The card ships inside the app folder (apps/fp2_companion/card/), and the app
+# installs it into Home Assistant's www folder and points the dashboard
+# resource at it when it starts (card_install.py), so there is no separate
+# card step.
 #
 # It assumes Home Assistant OS with the AppDaemon add-on and SSH access to the
 # host (for example the "Advanced SSH & Web Terminal" add-on with protection
@@ -13,12 +16,10 @@
 #   SSH_HOST     the host as ssh knows it            (default: homeassistant)
 #   ADDON_SLUG   the AppDaemon add-on's slug         (default: a0d7b954_appdaemon)
 #   STAGE        a writable folder on the host       (default: /root)
-#   CARD_DEST    where the card goes on the host     (default: /config/www/fp2-companion-card.js)
 #
 # Only files tracked by git are deployed, every one is validated first, and a
 # file that does not parse refuses the whole deploy. AppDaemon reloads the app
-# by itself. The browser caches the card hard, so after a card deploy raise
-# the ?v= of its dashboard resource.
+# by itself, and the app then updates the card and its resource's ?v=.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,14 +28,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SSH_HOST="${SSH_HOST:-homeassistant}"
 ADDON_SLUG="${ADDON_SLUG:-a0d7b954_appdaemon}"
 STAGE="${STAGE:-/root}"
-CARD_DEST="${CARD_DEST:-/config/www/fp2-companion-card.js}"
-WHAT="${1:-all}"
 
 cd "$ROOT"
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "ERROR: $ROOT is not a git work tree, so there is no file list to deploy." >&2
   exit 1
 fi
+
+check_js() {
+  node --check "$1" || return 1
+  # A back quote inside the CSS template literal ends the stylesheet early.
+  local css
+  css="$(awk '/^const STYLE = `/{on=1; next} on && /^`;/{exit} on' "$1")"
+  if printf '%s' "$css" | grep -q '`'; then
+    echo "  a back quote inside the STYLE block of $1" >&2
+    return 1
+  fi
+}
 
 deploy_app() {
   # Home Assistant renamed the add-on containers from addon_ to app_ in
@@ -60,6 +70,8 @@ deploy_app() {
       *.py)
         python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
+      *.js)
+        check_js "$f" || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
       *.yaml)
         python3 -c "
 import sys, yaml
@@ -86,25 +98,4 @@ yaml.safe_load(open(sys.argv[1]))" "$f" \
   echo "App: ${#files[@]} file(s) to $addon:/config/apps/fp2_companion"
 }
 
-deploy_card() {
-  local card=card/fp2-companion-card.js
-  node --check "$card"
-  # A back quote inside the CSS template literal ends the stylesheet early.
-  local css
-  css="$(awk '/^const STYLE = `/{on=1; next} on && /^`;/{exit} on' "$card")"
-  if printf '%s' "$css" | grep -q '`'; then
-    echo "ERROR: a back quote inside the card's STYLE block." >&2
-    exit 1
-  fi
-  scp -q "$card" "$SSH_HOST:$CARD_DEST"
-  local version
-  version="$(grep -o "CARD_VERSION = '[^']*'" "$card" | cut -d"'" -f2)"
-  echo "Card $version to $SSH_HOST:$CARD_DEST; raise the resource's ?v= to $version"
-}
-
-case "$WHAT" in
-  all) deploy_app; deploy_card ;;
-  app) deploy_app ;;
-  card) deploy_card ;;
-  *) echo "usage: $0 [all|app|card]" >&2; exit 2 ;;
-esac
+deploy_app

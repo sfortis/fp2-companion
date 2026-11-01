@@ -1,7 +1,7 @@
 /*
  * Smoke test for fp2-companion-card, in jsdom, with no Home Assistant and no browser.
  *
- *   NODE_PATH="$(npm root -g)" node card/test/fp2-companion-smoke.js
+ *   NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-smoke.js
  *
  * What it can prove: that every status renders without throwing, that the map
  * draws one cell per block in the right place, that overlaps and the
@@ -16,7 +16,7 @@ const path = require('path');
 
 const { JSDOM } = require('jsdom');
 
-const CARD = process.env.CARD_PATH || path.join(__dirname, '..', 'fp2-companion-card.js');
+const CARD = process.env.CARD_PATH || path.join(__dirname, '..', '..', 'apps', 'fp2_companion', 'card', 'fp2-companion-card.js');
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 Object.assign(global, {
   window: dom.window, document: dom.window.document,

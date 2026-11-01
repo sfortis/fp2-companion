@@ -34,4 +34,4 @@ jobs:
       - name: Python tests
         run: python -m pytest tests -q
       - name: Card smoke test
-        run: NODE_PATH="$(npm root -g)" node card/test/fp2-companion-smoke.js
+        run: NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-smoke.js

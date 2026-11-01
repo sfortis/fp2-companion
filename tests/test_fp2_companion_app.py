@@ -1135,3 +1135,128 @@ def test_terminate_shuts_the_tracker_down_once(fp2):
     app.terminate()
     app.terminate()
     assert tracker.calls == [("shutdown",)]
+
+
+# ------------------------------------------------------------ card install
+class CardWs:
+    def __init__(self, resources=(), fail=None):
+        self.resources = list(resources)
+        self.sent = []
+        self.fail = fail
+
+    def __call__(self, messages):
+        from card_install import CardInstallError
+        out = []
+        for m in messages:
+            self.sent.append(m)
+            if m["type"] == self.fail:
+                raise CardInstallError(f"{m['type']}: unknown_command")
+            out.append(list(self.resources) if m["type"] == "lovelace/resources" else {})
+        return out
+
+
+def card_app(fp2, tmp_path, ws, **args):
+    (tmp_path / "ha" / "www").mkdir(parents=True)
+    app, world = fp2(args={"card_dir": str(tmp_path / "ha" / "www" / "fp2"), **args})
+    app._make_card_ws = lambda: ws
+    return app, world
+
+
+def test_startup_installs_the_card(fp2):
+    app, world = fp2()
+    assert app._install_card in [t["callback"] for t in world.timers]
+
+
+def test_the_card_is_copied_and_its_resource_created(fp2, tmp_path):
+    ws = CardWs()
+    app, world = card_app(fp2, tmp_path, ws)
+    app._install_card()
+    copy = tmp_path / "ha" / "www" / "fp2" / "fp2-companion-card.js"
+    with open(fp2.mod.CARD_SOURCE, "rb") as handle:
+        assert copy.read_bytes() == handle.read()
+    assert [m["type"] for m in ws.sent] == ["lovelace/resources",
+                                            "lovelace/resources/create"]
+    assert any("resource created" in line for line in world.logs)
+
+
+def test_a_refused_resource_logs_the_manual_step(fp2, tmp_path):
+    app, world = card_app(fp2, tmp_path, CardWs(fail="lovelace/resources"))
+    app._install_card()
+    assert (tmp_path / "ha" / "www" / "fp2" / "fp2-companion-card.js").exists()
+    assert any("resource not set" in line and "add the resource" in line
+               for line in world.logs)
+
+
+def test_another_resource_loading_the_card_is_reported(fp2, tmp_path):
+    ws = CardWs([{"id": "a", "url": "/local/hvac/fp2-companion-card.js", "type": "module"},
+                 {"id": "b", "url": "/local/fp2-companion-card.js", "type": "module"}])
+    app, world = card_app(fp2, tmp_path, ws)
+    app._install_card()
+    assert ws.sent[-1]["type"] == "lovelace/resources/update"
+    assert ws.sent[-1]["resource_id"] == "a"
+    assert any("ids b" in line for line in world.logs)
+
+
+def test_without_a_home_assistant_config_folder_nothing_is_written(fp2, tmp_path):
+    ws = CardWs()
+    app, world = fp2(args={"card_dir": str(tmp_path / "nowhere" / "www" / "fp2")})
+    app._make_card_ws = lambda: ws
+    app._install_card()
+    assert not (tmp_path / "nowhere").exists() and ws.sent == []
+    assert any("card not installed" in line for line in world.logs)
+
+
+def test_a_new_www_folder_asks_for_one_restart(fp2, tmp_path):
+    (tmp_path / "ha").mkdir()
+    app, world = fp2(args={"card_dir": str(tmp_path / "ha" / "www" / "fp2")})
+    app._make_card_ws = lambda: CardWs()
+    app._install_card()
+    assert any("restart Home Assistant once" in line for line in world.logs)
+
+
+def test_the_install_can_be_turned_off(fp2, tmp_path):
+    ws = CardWs()
+    app, world = card_app(fp2, tmp_path, ws, card_install=False)
+    app._install_card()
+    assert ws.sent == [] and not (tmp_path / "ha" / "www" / "fp2").exists()
+
+
+# ------------------------------------------------------------ command topics
+def test_startup_probes_the_command_topics(fp2):
+    app, world = fp2()
+    probes = [d["topic"] for s, _e, d in world.calls
+              if s == "mqtt/publish" and d.get("namespace") == "mqtt"]
+    assert sorted(probes) == ["fp2companion/cmd/probe",
+                              "fp2companion/probe/cmd/probe"]
+
+
+def test_a_probe_is_not_taken_for_a_command(fp2):
+    app, world = fp2()
+    app.start()
+    before = list(world.logs)
+    app._on_cmd("MQTT_MESSAGE", {"topic": "fp2companion/cmd/probe",
+                                 "payload": app.commands.nonce}, None)
+    app._on_cmd("MQTT_MESSAGE", {"topic": "fp2companion/probe/cmd/probe",
+                                 "payload": app.commands.nonce}, None)
+    assert world.logs == before
+    assert app.commands.heard == {"fp2companion/cmd/#", "fp2companion/+/cmd/#"}
+
+
+def test_a_changed_card_file_is_installed_again(fp2, tmp_path):
+    ws = CardWs()
+    app, world = card_app(fp2, tmp_path, ws)
+    source = tmp_path / "card.js"
+    source.write_bytes(b"const CARD_VERSION = '9.0.0';")
+    fp2.mod.CARD_SOURCE = str(source)
+    try:
+        app._install_card()
+        sent = len(ws.sent)
+        app._watch_card()
+        assert len(ws.sent) == sent, "an unchanged card is left alone"
+        source.write_bytes(b"const CARD_VERSION = '9.0.1';")
+        app._watch_card()
+        assert len(ws.sent) > sent
+        copy = tmp_path / "ha" / "www" / "fp2" / "fp2-companion-card.js"
+        assert copy.read_bytes() == b"const CARD_VERSION = '9.0.1';"
+    finally:
+        fp2.mod.CARD_SOURCE = __import__("card_install").CARD_SOURCE

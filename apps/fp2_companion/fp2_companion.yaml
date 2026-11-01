@@ -37,5 +37,12 @@ fp2_companion:
   # at a few KB each.
   backups_keep: 50
 
+  # The card ships in card/ beside the app. At startup the app copies it into
+  # Home Assistant's www folder and points its dashboard resource at the copy,
+  # with ?v= set from the file, so an update needs no step by hand. Turn it off
+  # to install the card yourself; card_dir moves the copy.
+  # card_install: true
+  # card_dir: /homeassistant/www/fp2-companion
+
   base_topic: fp2companion
   discovery_prefix: homeassistant

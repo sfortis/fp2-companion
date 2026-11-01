@@ -21,6 +21,7 @@ the live target positions, and only while a card holds a lease on them
 (`live_track.py`, owner's decision, 2026-10-31).
 """
 
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,9 @@ from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          RID_SENSITIVITY, AqaraAuthError, AqaraCloud,
                          AqaraError, AqaraRefused, SessionStore,
                          did_from_serial, jwt_exp)
+from card_install import (CARD_SOURCE, DEFAULT_WWW_DIR, RESOURCE_CURRENT,
+                          CardInstallError, install_card, supervisor_ws_call)
+from command_topics import CommandTopics
 from live_track import LiveTracker, to_grid
 from regions import COUNTRIES
 from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
@@ -797,12 +801,74 @@ class Fp2Companion(hass.Hass):
         # namespace="mqtt" is REQUIRED: the MQTT plugin publishes its events in
         # its own namespace, and without it the app ignores every command.
         self.listen_event(self._on_cmd, "MQTT_MESSAGE", namespace="mqtt")
+        self.commands = CommandTopics(self, self.base)
+        self.commands.start()
+        # AppDaemon reloads the app when a .py or .yaml file changes, not when
+        # only the card does, so the card file is watched as well.
+        self._card_stamp = None
+        self.run_in(self._install_card, 1)
+        self.run_every(self._watch_card, "now+60", 60)
         self.run_daily(self.token_check, a.get("token_check_time", "04:10:00"))
         self.run_in(self.start, 5)
 
     def _make_cloud(self, did):
         return AqaraCloud(SessionStore(SESSION_FILE), self._app_id,
                           self._app_key, did, identities=self._identities)
+
+    def _make_card_ws(self):
+        return supervisor_ws_call(os.environ.get("SUPERVISOR_TOKEN"))
+
+    @staticmethod
+    def _card_file_stamp():
+        """A digest of the card file. Not its mtime: tar and a rewrite of the
+        same size can leave that unchanged."""
+        try:
+            with open(CARD_SOURCE, "rb") as handle:
+                return hashlib.sha256(handle.read()).hexdigest()
+        except OSError:
+            return None
+
+    def _watch_card(self, kwargs=None):
+        if self._card_file_stamp() != self._card_stamp:
+            self._install_card()
+
+    def _install_card(self, kwargs=None):
+        """Copies the card that ships with the app into Home Assistant's www
+        folder and points its dashboard resource at the copy (card_install).
+        Anything it cannot do is logged with the step to do by hand."""
+        self._card_stamp = self._card_file_stamp()
+        if not self.args.get("card_install", True):
+            return
+        www_dir = self.args.get("card_dir", DEFAULT_WWW_DIR)
+        www = os.path.dirname(www_dir)
+        if not os.path.isdir(os.path.dirname(www)):
+            self.log(f"card not installed: {os.path.dirname(www)} does not "
+                     f"exist here; copy card/fp2-companion-card.js into "
+                     f"Home Assistant's www folder and add it as a resource, "
+                     f"or set card_dir", level="WARNING")
+            return
+        new_www = not os.path.isdir(www)
+        try:
+            with open(CARD_SOURCE, "rb") as handle:
+                data = handle.read()
+            copied, action, url, extra = install_card(
+                data, www_dir, self._make_card_ws())
+        except CardInstallError as exc:
+            self.log(f"card copied, resource not set: {exc}; {exc.manual}",
+                     level="WARNING")
+            return
+        except OSError as exc:
+            self.log(f"card not installed: {exc}", level="WARNING")
+            return
+        if copied or action != RESOURCE_CURRENT:
+            self.log(f"card {'copied, ' if copied else ''}resource {action}: {url}")
+        if new_www:
+            self.log(f"{www} was created; restart Home Assistant once so it "
+                     f"serves /local", level="WARNING")
+        if extra:
+            self.log(f"other dashboard resources load the card as well "
+                     f"(ids {', '.join(map(str, extra))}); remove them, or the "
+                     f"card is loaded twice", level="WARNING")
 
     def _make_tracker(self):
         # A lambda, so the tests' replacement of _make_cloud applies.
@@ -961,6 +1027,8 @@ class Fp2Companion(hass.Hass):
             return
         rest = topic[len(self.base) + 1:]
         payload = str((data or {}).get("payload") or "").strip()
+        if self.commands.consume(topic, payload):
+            return
         if rest.startswith("cmd/"):
             key = rest[len("cmd/"):]
             if key == "login":

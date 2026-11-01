@@ -3,7 +3,7 @@
  * HTML file, so it can be screenshotted in a headless browser and looked at.
  *
  *   HA_URL=http://homeassistant.local:8123 HA_TOKEN=<long-lived token> \
- *     NODE_PATH="$(npm root -g)" node card/test/fp2-companion-render.js > ~/fp2.html
+ *     NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-render.js > ~/fp2.html
  *   chromium --headless --screenshot=$HOME/fp2.png --window-size=420,1500 ~/fp2.html
  *
  * The snap Chromium cannot read /tmp, so write the HTML under $HOME.
@@ -19,7 +19,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const { JSDOM } = require('jsdom');
-const CARD = process.env.CARD_PATH || path.join(__dirname, '..', 'fp2-companion-card.js');
+const CARD = process.env.CARD_PATH || path.join(__dirname, '..', '..', 'apps', 'fp2_companion', 'card', 'fp2-companion-card.js');
 const HA_URL = process.env.HA_URL || 'http://homeassistant.local:8123';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
