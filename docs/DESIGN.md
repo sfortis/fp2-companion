@@ -95,6 +95,25 @@ not depend on the cloud.
     through AppDaemon's MQTT plugin, and the card listens through Home
     Assistant's `mqtt/subscribe`. Nothing reaches the recorder, but the
     live view needs an admin user.
+22. The card ships inside the app folder, because HACS downloads an
+    AppDaemon repository's app folder and nothing else, and a second
+    repository would let the card and the app drift apart. At startup the
+    app copies the card into Home Assistant's `www/fp2-companion/` and
+    points one dashboard resource at it, with the card's version and a
+    digest of the file in `?v=`, so a browser loads every new card. It
+    changes the resource over Home Assistant's websocket API through the
+    Supervisor with the add-on's `SUPERVISOR_TOKEN`, a documented add-on
+    interface, rather than through AppDaemon's internal websocket. A
+    resource for the card that a person added by hand is updated, never
+    doubled, and further ones are reported, never deleted.
+23. The app makes sure the card's commands reach it. It cannot read the
+    MQTT plugin's `client_topics`, and subscribing regardless doubles every
+    command for a list that already covers it: Mosquitto 2.1.2 delivers a
+    message twice to a client subscribed to both `#` and
+    `fp2companion/cmd/#` (measured on 2026-11-01). So it publishes a probe
+    on each command topic, subscribes through the plugin's `mqtt/subscribe`
+    service only to a topic whose probe did not come back, and probes
+    again. A topic still silent is a warning in the log.
 
 ## Modules
 
@@ -116,6 +135,12 @@ Assistant side.
   thread and event loop. It handles the leases, subscribes and renews every
   watched device, writes the heartbeat, reconnects with a backoff, and
   parses each push into targets with their place on the grid.
+- `card_install.py` copies the card into Home Assistant's `www` folder and
+  plans and makes the change to its dashboard resource (decision 22). The
+  plan is pure and the websocket client is injected, so the tests need no
+  Home Assistant.
+- `command_topics.py` probes the MQTT command topics and subscribes to the
+  silent ones (decision 23).
 - `fp2_companion.py` is the AppDaemon app: discovery, commands, reads, writes
   and their readback, backups, entities and status.
 - `tools/` holds command line helpers that run inside the AppDaemon

@@ -84,62 +84,16 @@ any apps you already have into it as well.
 Home Assistant OS that is `/addon_configs/a0d7b954_appdaemon/apps/`.
 
 The app's settings are in `fp2_companion.yaml` beside it, and the defaults
-suit most homes. HACS installs and updates the app only; the card is
-installed by hand, in step 4.
+suit most homes.
 
-### 2. The app identity (usually nothing to do)
+### 2. The card
 
-Every request is signed with the Aqara Home app's own identity, an app id
-and an app key that are the same for every user of that app. They are built
-in, one pair per region, in `regions.py`, taken from the open-source
-[Aqara-LANLink](https://github.com/absent42/Aqara-LANLink) integration. On
-2026-10-31 Aqara's servers accepted the pairs for EU, US, RU, KR and AU,
-which cover every region that shares their servers.
-
-The China region (CN) rejected its pair. An account there needs a working
-pair of its own in the add-on's `secrets.yaml`:
-
-```yaml
-aqara_app_id: "..."
-aqara_app_key: "..."
-```
-
-Then uncomment `app_id` and `app_key` in `fp2_companion.yaml`. A configured
-pair, and any listed as `app_identities`, is tried after the region's own,
-and a sign-in keeps the first pair the region accepts.
-
-### 3. The MQTT command topics
-
-The card sends its commands to the app over MQTT. AppDaemon's MQTT plugin
-subscribes only to the topics in its `client_topics` list, so add both of
-these to the MQTT plugin in `appdaemon.yaml`:
-
-```yaml
-plugins:
-  MQTT:
-    type: mqtt
-    namespace: mqtt
-    # client_host, client_user, client_password: as for your broker
-    client_topics:
-      - fp2companion/cmd/#
-      - fp2companion/+/cmd/#
-```
-
-Restart the add-on afterwards. The plugin reads this list, and
-`secrets.yaml`, only at startup, so a missing topic makes every command on
-the card do nothing without any error.
-
-### 4. The card
-
-Copy `card/fp2-companion-card.js` to `/config/www/` and add it as a dashboard
-resource (Settings, Dashboards, Resources):
-
-```
-/local/fp2-companion-card.js?v=1.8.0
-```
-
-with the type **JavaScript module**. Raise the `?v=` after every update of
-the file, because browsers cache it hard. Then add the card to a dashboard:
+The card ships with the app, so HACS installs and updates both. When the app
+starts it copies the card into Home Assistant's `www` folder and adds the
+dashboard resource for it, and after an update it changes the resource's
+`?v=` so browsers load the new card. A resource for the card that you added
+by hand is moved to the new copy rather than doubled. Add the card to a
+dashboard:
 
 ```yaml
 type: custom:fp2-companion-card
@@ -154,7 +108,12 @@ type: custom:fp2-companion-card
 | `entities` | `{}` | Overrides for entity ids renamed in the registry, on a pinned card |
 | `text` | English | Every word on the card, for a translation |
 
-### 5. Sign in
+The card sends its commands to the app over MQTT. At startup the app checks
+that they reach it, and subscribes to its command topics itself when your
+`client_topics` list in `appdaemon.yaml` leaves them out. When something
+stops either step, the AppDaemon log says what to do by hand.
+
+### 3. Sign in
 
 Open the card and sign in with your Aqara account and its country. The app
 creates its own session and keeps it alive by itself; the token is renewed
@@ -183,22 +142,23 @@ not green.
 
 ## Live View
 
-The live view follows what the Aqara app does on its device page. While the
-card's map is on screen, the card holds a lease that it renews every 30
-seconds. While any lease is held, the app keeps one websocket to the Aqara
-cloud, subscribes to each watched FP2, and writes the FP2's "device page
-open" heartbeat every 60 seconds, which is what makes the FP2 send its
-targets at all. Each update (about one every 0.75 seconds) goes to the
-unretained MQTT topic `fp2companion/<serial>/live`, and the card listens to it
-directly, so nothing is written to Home Assistant's recorder.
+The live view runs only while the card's map is on screen, and stops when
+the card is scrolled away or the screen goes off. Nothing it shows is written
+to Home Assistant's recorder. [docs/DESIGN.md](docs/DESIGN.md) explains how
+it works.
 
-When the card is scrolled away, its tab is hidden, the dashboard view
-changes or the screen goes off, the card gives its lease back and the app
-closes the socket. A browser that disappears without a word is dropped
-after 75 seconds.
+## Known Limits
 
-The dots use the placement for a wall-mounted FP2. A ceiling mount has not
-been checked.
+- The dots and the FP2 on the map use the placement for a wall-mounted FP2.
+  A ceiling mount has not been checked.
+- Accounts in the China region (CN) cannot sign in with the built-in Aqara
+  app identity. Such an account needs a working pair of its own, as
+  `aqara_app_id` and `aqara_app_key` in the add-on's `secrets.yaml`, with
+  `app_id` and `app_key` uncommented in `fp2_companion.yaml`.
+- The card installs its own dashboard resource only when Home Assistant runs
+  with a Supervisor (Home Assistant OS or Supervised) and the resources are
+  managed in the UI. Otherwise the AppDaemon log names the resource to add.
+- An entrance and exit zone is shown but not edited.
 
 ## Security and Privacy
 
@@ -210,6 +170,8 @@ been checked.
 - The app writes only a fixed list of settings and values, and refuses
   anything else before it reaches the network.
 - Zone backups are in `/share/appdaemon/fp2_companion/backups/<device id>/`.
+- The app uses the add-on's Supervisor token for one thing only: to read the
+  dashboard resources and create or update the card's own.
 
 ## Entities
 
@@ -225,12 +187,12 @@ creates `sensor.fp2_companion_devices`, which lists every FP2 it serves.
 
 ```
 python3 -m pytest tests
-NODE_PATH="$(npm root -g)" node card/test/fp2-companion-smoke.js
+NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-smoke.js
 ```
 
 The Python tests need only `pytest`. The card test needs `jsdom` installed
 globally, and Python's `cryptography` for its RSA check.
-`card/test/fp2-companion-render.js` renders the card from a live Home Assistant
+`tests/card/fp2-companion-render.js` renders the card from a live Home Assistant
 into an HTML file, for a look in a headless browser. `scripts/deploy.sh`
 deploys to a Home Assistant OS host over SSH.
 
