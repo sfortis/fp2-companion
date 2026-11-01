@@ -37,7 +37,9 @@ and does not depend on the cloud.
 - **Backups:** the zones are backed up whenever they change and before every
   write. Any backup can be previewed on the map and restored.
 - **Live view:** the people and interference sources the FP2 is tracking,
-  drawn as dots on the zone map, while the card is on screen.
+  drawn as dots on the zone map, while the card is on screen. The FP2 itself
+  is drawn where the Aqara app draws it, at the middle of the top side for a
+  wall mount.
 - **Sign-in from the card:** email, password and country, the same as the
   Aqara app. The password is encrypted in the browser and never stored.
 - **No polling:** the app reads the cloud at startup, after every write and

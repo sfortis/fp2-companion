@@ -45,7 +45,7 @@
  * one login and keeps only the token.
  */
 
-const CARD_VERSION = '1.15.0';
+const CARD_VERSION = '1.16.0';
 
 /* A radar fan. Decorative only: it never changes with state. */
 const RADAR_ICON = `
@@ -339,6 +339,9 @@ button.arm { background: var(--error-color, #f44336);
 .map.editing { touch-action: none; cursor: crosshair; }
 .map .grid { stroke: var(--divider-color); stroke-width: .5; fill: none;
              pointer-events: none; }
+.map .sensor { pointer-events: none; }
+.map .sensor .ring { fill: var(--primary-color); opacity: .14; }
+.map .sensor .core { fill: var(--primary-color); }
 .map .frame { stroke: var(--secondary-text-color); stroke-width: 1; fill: none;
               opacity: .6; pointer-events: none; }
 .map .cell { stroke: none; pointer-events: none; }
@@ -1702,6 +1705,7 @@ class Fp2CompanionCard extends HTMLElement {
     for (let rr = 0; rr <= rows; rr += 1) lines += `M0 ${rr * CELL}H${w}`;
     svg.appendChild(svgEl('path', { class: 'grid', d: lines }));
     svg.appendChild(svgEl('rect', { class: 'frame', x: 0, y: 0, width: w, height: h }));
+    this._drawSensor(svg, defs, w, h);
 
     if (edit) {
       this._drawPaintLayer(svg, grid, edit, colours);
@@ -1727,6 +1731,27 @@ class Fp2CompanionCard extends HTMLElement {
       svg.appendChild(label);
     });
     return svg;
+  }
+
+  /* The FP2 itself, drawn as the Aqara app draws it: a dot with two rings,
+   * cut by the frame. The app sends where it sits, the point x=0, y=0 of the
+   * live positions (the middle of the top side for a wall mount). Nothing is
+   * drawn when the app does not send it. */
+  _drawSensor(svg, defs, w, h) {
+    const at = this._za && this._za.sensor;
+    const col = Number(at && at.col);
+    const row = Number(at && at.row);
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return;
+    const clip = svgEl('clipPath', { id: 'mapclip' });
+    clip.appendChild(svgEl('rect', { x: 0, y: 0, width: w, height: h }));
+    defs.appendChild(clip);
+    const g = svgEl('g', { class: 'sensor', 'clip-path': 'url(#mapclip)' });
+    const cx = col * CELL;
+    const cy = row * CELL;
+    g.appendChild(svgEl('circle', { class: 'ring', cx, cy, r: CELL }));
+    g.appendChild(svgEl('circle', { class: 'ring', cx, cy, r: CELL * 0.6 }));
+    g.appendChild(svgEl('circle', { class: 'core', cx, cy, r: CELL * 0.22 }));
+    svg.appendChild(g);
   }
 
   _drawPaintLayer(svg, grid, edit, colours) {

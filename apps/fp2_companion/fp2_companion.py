@@ -34,7 +34,7 @@ from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          RID_SENSITIVITY, AqaraAuthError, AqaraCloud,
                          AqaraError, AqaraRefused, SessionStore,
                          did_from_serial, jwt_exp)
-from live_track import LiveTracker
+from live_track import LiveTracker, to_grid
 from regions import COUNTRIES
 from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
                         ERR_ENTRANCE_LOCKED, ERR_RANGE_ID, LOCKED_REGIONS,
@@ -648,6 +648,10 @@ class Fp2Device:
         self._pub(f"{self.base}/zones/attrs", {
             "did": self.info["did"],
             "grid": {"columns": COLUMNS, "rows": ROWS},
+            # Where the FP2 itself sits on the grid, the point x=0, y=0 of the
+            # live positions, so the card draws it where the Aqara app does
+            # and it moves with any future mounting transform.
+            "sensor": dict(zip(("col", "row"), to_grid(0, 0))),
             "zones": self.zones,
             "tags": self.app.zone_tags,
             "backups": list_backups(self.info["backup_dir"])[:BACKUPS_SHOWN],

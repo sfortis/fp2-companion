@@ -297,6 +297,7 @@ def test_the_card_gets_the_zones_and_the_grid(fp2):
     app.start()
     attrs = zone_attrs(world)
     assert attrs["grid"] == {"columns": 16, "rows": 20}
+    assert attrs["sensor"] == {"col": 8, "row": 0}
     assert [z["rangeId"] for z in attrs["zones"]] == [3, 1, 101]
     assert attrs["backups"][0]["reason"] == "first-read"
 

@@ -84,7 +84,7 @@ function states(over = {}) {
       last_read: '2026-10-30T09:05:13', token_expires: '2026-11-29T08:47:10',
       account: 'j.w*****@example.com', signed_in: true } },
     [E.zones]: { state: '3', attributes: {
-      grid: { columns: 16, rows: 20 }, zones: ZONES,
+      grid: { columns: 16, rows: 20 }, sensor: { col: 8, row: 0 }, zones: ZONES,
       backups: [
         { name: 'zones-20261030T090122.json', saved_at: 1793343682,
           reason: 'first-read', zones: ['Couch', 'Kitchen Countertop'] },
@@ -825,6 +825,30 @@ print(key.decrypt(base64.b64decode(sys.argv[2]), padding.PKCS1v15()).decode())
   ok(again !== blob, 'the padding is random, so two blocks differ');
   eq(Buffer.from(encryptPassword('x'), 'base64').length, 128,
     'the Aqara key gives a 128-byte block');
+}
+
+/* ---------- the FP2 on the map ---------- */
+{
+  const { root } = mount();
+  const sensor = root.querySelector('svg.map g.sensor');
+  ok(sensor, 'the FP2 is drawn on the map');
+  const core = sensor && sensor.querySelector('circle.core');
+  eq(core && core.getAttribute('cx'), '80', 'at the middle of the top side (x)');
+  eq(core && core.getAttribute('cy'), '0', 'at the middle of the top side (y)');
+  eq(sensor && sensor.querySelectorAll('circle.ring').length, 2, 'with two rings');
+  eq(sensor && sensor.getAttribute('clip-path'), 'url(#mapclip)', 'cut by the frame');
+  ok(root.querySelector('svg.map clipPath#mapclip rect'), 'the clip is the frame');
+  document.body.innerHTML = '';
+}
+{
+  const st = states();
+  const attrs = Object.assign({}, st[E.zones].attributes);
+  delete attrs.sensor;
+  st[E.zones] = { state: '3', attributes: attrs };
+  const { root } = mount(st);
+  ok(root.querySelector('svg.map'), 'a map without the FP2 position still draws');
+  ok(!root.querySelector('svg.map g.sensor'), 'no FP2 is drawn when the app sends no position');
+  document.body.innerHTML = '';
 }
 
 /* ---------- live dots ---------- */
