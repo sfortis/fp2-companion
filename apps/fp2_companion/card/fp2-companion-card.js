@@ -88,8 +88,11 @@ const DEFAULTS = {
 
   /* Every word on screen comes from here. */
   text: {
-    no_status: 'No status from {entity}. Is the fp2_companion app running?',
-    no_devices: 'No FP2 from {entity}. Is the fp2_companion app running?',
+    no_hub: 'No {entity}. Is the fp2_companion app running?',
+    no_devices: 'The fp2_companion app has found no FP2 yet. An FP2 that is not '
+      + 'paired over HomeKit is listed by its serial under devices: in fp2_companion.yaml.',
+    no_status: 'No {entity}. The app serves this FP2, so its entities may have '
+      + 'other ids: name them under entities: on a card pinned with device:.',
     device_missing: 'The FP2 {device} is not among the devices the app serves.',
     country: 'Country',
     sensitivity: 'Sensitivity',
@@ -506,6 +509,15 @@ function deepDefaults(user, defaults) {
   return out;
 }
 
+/* The prefix of the device's entity ids as they are now, from its status
+ * entity, which carries the device's cloud id. */
+function prefixByDid(states, did) {
+  const id = Object.keys(states || {}).find((k) => k.startsWith('sensor.')
+    && k.endsWith('_cloud_status') && states[k].attributes
+    && states[k].attributes.did === did);
+  return id ? id.slice('sensor.'.length, -'_cloud_status'.length) : null;
+}
+
 function tpl(text, vars) {
   return String(text || '').replace(/\{(\w+)\}/g, (m, k) => (
     vars[k] === undefined || vars[k] === null ? m : String(vars[k])
@@ -806,8 +818,14 @@ class Fp2CompanionCard extends HTMLElement {
     const cfg = this._config;
     const hub = hass && hass.states && hass.states[cfg.devices_entity];
     const devices = (hub && hub.attributes && hub.attributes.devices) || [];
+    /* No hub means no app, while a hub with no device is an app that is
+     * running and has found nothing yet. */
+    if (!hub) {
+      this._renderError(tpl(cfg.text.no_hub, { entity: cfg.devices_entity }));
+      return;
+    }
     if (!devices.length) {
-      this._renderError(tpl(cfg.text.no_devices, { entity: cfg.devices_entity }));
+      this._renderError(cfg.text.no_devices);
       return;
     }
     const device = this._pickDevice(devices);
@@ -824,8 +842,20 @@ class Fp2CompanionCard extends HTMLElement {
     this._hub = hub;
     this._devices = devices;
     this._liveSync();
+    let status = hass.states[this._ents.status];
+    /* The entity ids follow the device's prefix only when the entities are
+     * created, so ones made under an earlier prefix keep it: an FP2 listed
+     * by serial in the yaml and found over HomeKit later is one (seen on
+     * 2026-11-02). Its status entity still names the device, so the card
+     * looks for it once and takes the prefix from there. */
+    if (!status) {
+      const prefix = prefixByDid(hass.states, device.did);
+      if (prefix && prefix !== this._prefix) {
+        this._switchTo(device, prefix);
+        status = hass.states[this._ents.status];
+      }
+    }
     const ents = this._ents;
-    const status = hass.states[ents.status];
     if (!status) {
       this._renderError(tpl(cfg.text.no_status, { entity: ents.status }));
       return;
@@ -862,15 +892,16 @@ class Fp2CompanionCard extends HTMLElement {
     return devices.find((d) => d.key === wanted) || devices[0];
   }
 
-  _switchTo(device) {
+  _switchTo(device, prefix = device.prefix) {
     this._device = device;
+    this._prefix = prefix;
     const ents = {};
     Object.keys(ENTITY_SUFFIX).forEach((k) => {
       const [domain, suffix] = ENTITY_SUFFIX[k];
       /* An override names one entity, so it holds only on a card pinned to
        * one device; on a card with the picker it would follow every device. */
       const override = this._config.device ? this._config.entities[k] : null;
-      ents[k] = override || `${domain}.${device.prefix}_${suffix}`;
+      ents[k] = override || `${domain}.${prefix}_${suffix}`;
     });
     this._ents = ents;
     /* Everything shown belongs to the device, so a switch starts clean. */
