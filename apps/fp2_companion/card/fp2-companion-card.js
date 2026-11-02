@@ -242,6 +242,9 @@ const ARM_MS = 4000;
 const LIVE_RENEW_MS = 30000;
 /* Pushes come about every 0.75 s; this long without one greys the dots. */
 const LIVE_STALE_MS = 5000;
+/* An admin's subscription that failed (the websocket reconnecting, MQTT
+ * reloading) is tried again after this long. */
+const LIVE_RETRY_MS = 30000;
 const LIVE_DOT_R = 3.2;
 /* How long "Sent" stays up if no new zone list arrives at all. */
 const SENDING_MS = 20000;
@@ -734,6 +737,8 @@ class Fp2CompanionCard extends HTMLElement {
     this._liveMsg = null;
     this._liveAt = 0;
     this._liveNotAdmin = false;
+    this._liveFailed = false;
+    this._liveRetry = null;
     this._liveLayer = null;
     this._dots = new Map();
     this._liveClient = Math.random().toString(36).slice(2, 12);
@@ -769,6 +774,9 @@ class Fp2CompanionCard extends HTMLElement {
     if (this._observer) this._observer.disconnect();
     this._observer = null;
     this._inView = true;
+    if (this._liveRetry) clearTimeout(this._liveRetry);
+    this._liveRetry = null;
+    this._liveFailed = false;
     this._liveSync();
   }
 
@@ -940,9 +948,14 @@ class Fp2CompanionCard extends HTMLElement {
   _liveSync() {
     const signedIn = Boolean(this._hub && this._hub.attributes
       && this._hub.attributes.signed_in);
+    /* Home Assistant says who is looking, so a user who is not an admin is
+     * told at once and never subscribes. */
+    const user = this._hass && this._hass.user;
+    if (user && user.is_admin === false) this._liveNotAdmin = true;
     const wanted = this._connected && this._hass && this._device && signedIn
       && document.visibilityState !== 'hidden' && this._inView
       && this._pane === 'zones' && this._preview === null && !this._liveNotAdmin
+      && !this._liveFailed
       ? this._device.key : null;
     if (wanted === this._liveKey) return;
     this._liveStop();
@@ -967,7 +980,21 @@ class Fp2CompanionCard extends HTMLElement {
         })
         .catch(() => {
           if (this._liveKey !== key) return;
-          this._liveNotAdmin = true;
+          /* Refused to a known admin, the subscription failed for another
+           * reason and is tried again later; without a user to go by, a
+           * refusal is taken as the admin check, as before. */
+          const admin = this._hass && this._hass.user && this._hass.user.is_admin === true;
+          if (admin) {
+            this._liveFailed = true;
+            if (this._liveRetry) clearTimeout(this._liveRetry);
+            this._liveRetry = setTimeout(() => {
+              this._liveRetry = null;
+              this._liveFailed = false;
+              this._liveSync();
+            }, LIVE_RETRY_MS);
+          } else {
+            this._liveNotAdmin = true;
+          }
           this._liveStop();
           this._drawLive();
         });
@@ -1031,6 +1058,9 @@ class Fp2CompanionCard extends HTMLElement {
       let level = '';
       if (this._liveNotAdmin) {
         text = t.not_admin;
+        level = 'warn';
+      } else if (this._liveFailed) {
+        text = t.retrying;
         level = 'warn';
       } else if (live) {
         const people = targets.filter((tg) => Number(tg.type) !== 1).length;
@@ -1415,6 +1445,11 @@ class Fp2CompanionCard extends HTMLElement {
     const aiOn = actual === 'on';
     r.sensitivity.seg.className = aiOn ? 'seg off' : 'seg';
     r.sensitivity.sub.textContent = aiOn ? t.sensitivity_by_ai : r.sensitivity.hint;
+    /* Disabled as well as greyed, so the keyboard cannot press what the
+     * device would ignore (decision 14). */
+    if (aiOn) {
+      Object.values(r.sensitivity.buttons || {}).forEach((b) => { b.disabled = true; });
+    }
 
     r.learning.row.hidden = !this._state('learning');
     const until = parseStamp(sa.learning_until);

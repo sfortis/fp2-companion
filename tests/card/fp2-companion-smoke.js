@@ -763,10 +763,13 @@ const BOUNDARY = { rangeId: 103, name: 'Boundary', regionType: 3, sensitivity: 1
     + `${pad(soon.getHours())}:${pad(soon.getMinutes())}:${pad(soon.getSeconds())}`;
   const st = states({ [E.ai]: { state: 'on', attributes: {} },
     [E.status]: { state: 'ok', attributes: { signed_in: true, learning_until: stamp } } });
-  const { root } = mount(st);
+  const { root, calls } = mount(st);
   ok(root.querySelector('button.toggle').classList.contains('on'), 'AI on shows the switch on');
   ok(root.querySelectorAll('.seg')[0].classList.contains('off'),
     'with AI on the sensitivity is disabled');
+  ok(segButtons(root, 0).every((b) => b.disabled), 'its buttons too, for the keyboard');
+  segButtons(root, 0)[1].click();
+  ok(!calls.some((c) => c.d === 'select'), 'so a press sends nothing');
   ok(root.querySelectorAll('.seg')[0].closest('.setting').textContent
     .includes('Set by AI person detection'), 'and the sensitivity row says why');
   const groups = [...root.querySelectorAll('.pane')[1].querySelectorAll('.group')].map((g) => [
@@ -1049,6 +1052,37 @@ async function liveChecks() {
       'a user without MQTT access is told so');
     eq(JSON.parse(leases[leases.length - 1].data.payload).on, false,
       'and the lease is given back');
+  }
+  {
+    /* Home Assistant names a user who is not an admin, so the card says so
+     * at once and never subscribes. */
+    const conn = fakeConnection();
+    const card = new Card();
+    card.setConfig({ type: 'custom:fp2-companion-card' });
+    card.hass = { states: states(), connection: conn, user: { is_admin: false },
+      callService: () => {} };
+    document.body.appendChild(card);
+    await Promise.resolve();
+    eq(conn.subs.length, 0, 'a user who is not an admin is not subscribed');
+    eq(card.shadowRoot.querySelector('.livebar').textContent, 'Live view needs an admin user',
+      'and is told why at once');
+    card.remove();
+  }
+  {
+    /* Refused to an admin, the subscription failed for another reason (a
+     * reconnecting websocket, MQTT reloading): no admin message, and a retry. */
+    const card = new Card();
+    card.setConfig({ type: 'custom:fp2-companion-card' });
+    card.hass = { states: states(), connection: fakeConnection(true),
+      user: { is_admin: true }, callService: () => {} };
+    document.body.appendChild(card);
+    await Promise.resolve();
+    await Promise.resolve();
+    eq(card.shadowRoot.querySelector('.livebar').textContent, 'Reconnecting the live view',
+      'an admin whose subscription failed is not told to be an admin');
+    ok(card._liveRetry, 'and the card tries again later');
+    card.remove();
+    ok(!card._liveRetry, 'unless it is taken off the page');
   }
   {
     const st = states({ [E.hub]: hub([LIVING, OFFICE]) });
