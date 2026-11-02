@@ -30,9 +30,11 @@ Object.defineProperty(global, 'navigator', { value: undefined, configurable: tru
 const SOURCE = fs.readFileSync(CARD, 'utf8');
 /* The crypto helpers are top-level functions of the card, so evaluating the
  * same source once more with a return statement hands them to the test. */
-const { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff } = new Function(
+const { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff, DEFAULTS, TRANSLATIONS,
+  cardLanguage, cardText } = new Function(
   `${SOURCE.replace("customElements.define('fp2-companion-card', Fp2CompanionCard);", '')}`
-  + '\nreturn { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff };')();
+  + '\nreturn { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff, DEFAULTS,'
+  + ' TRANSLATIONS, cardLanguage, cardText };')();
 new Function(SOURCE)();
 const Card = customElements.get('fp2-companion-card');
 
@@ -146,6 +148,72 @@ function segButtons(root, index) {
   }
   ok(threw, 'and leaves a config with entity overrides to YAML');
 }
+
+/* ---------- languages ---------- */
+/* A language has no key the English words lack, so it never carries a word
+ * nobody reads. A key it is missing shows in English, so a new English word
+ * never waits on its translation. */
+function keyPaths(o, at = '') {
+  return Object.keys(o).flatMap((k) => (o[k] && typeof o[k] === 'object'
+    ? keyPaths(o[k], `${at}${k}.`) : [`${at}${k}`])).sort();
+}
+Object.keys(TRANSLATIONS).forEach((lang) => {
+  const english = new Set(keyPaths(DEFAULTS.text));
+  eq(keyPaths(TRANSLATIONS[lang]).filter((k) => !english.has(k)).join(','), '',
+    `${lang} has no key the English words lack`);
+});
+{
+  const it = TRANSLATIONS.it.fill_outside;
+  delete TRANSLATIONS.it.fill_outside;
+  eq(cardText({}, 'it').fill_outside, DEFAULTS.text.fill_outside,
+    'a word missing in a language shows in English');
+  eq(cardText({}, 'it').tabs.settings, TRANSLATIONS.it.tabs.settings, 'next to the translated ones');
+  TRANSLATIONS.it.fill_outside = it;
+}
+eq(cardLanguage(null, { locale: { language: 'it-IT' } }), 'it', 'the user\'s language, first part');
+eq(cardLanguage(null, { language: 'it' }), 'it', 'or hass.language on an older frontend');
+eq(cardLanguage('en', { locale: { language: 'it' } }), 'en', 'the card config wins');
+eq(cardLanguage(null, {}), 'en', 'and English without either');
+
+function mountIn(language, config = {}) {
+  const card = new Card();
+  card.setConfig({ type: 'custom:fp2-companion-card', ...config });
+  const calls = [];
+  card.hass = { states: states(), locale: { language }, language,
+    callService: (d, s, data) => (isLease(data) ? null : calls.push({ d, s, data })) };
+  document.body.appendChild(card);
+  return { card, calls, root: card.shadowRoot };
+}
+{
+  const { root, calls } = mountIn('it');
+  eq([...root.querySelectorAll('.panetabs button')].map((b) => b.textContent).join(','),
+    'Zone,Impostazioni,Backup,Account', 'an Italian user gets Italian tabs');
+  eq(segButtons(root, 0).map((b) => b.textContent).join(','), 'Bassa,Media,Alta',
+    'and the options in Italian');
+  segButtons(root, 0)[2].click();
+  eq(calls[0].data.option, 'High', 'while the option sent stays the app\'s own');
+  const couch = [...root.querySelectorAll('.legend .row:not(.head)')]
+    .find((r) => r.querySelector('.nm').textContent === 'Couch');
+  eq(couch.querySelector('.sens').textContent, 'Media', 'a zone\'s sensitivity in Italian');
+}
+{
+  const { root } = mountIn('it', { text: { tabs: { zones: 'Mappa' } } });
+  eq(root.querySelectorAll('.panetabs button')[0].textContent, 'Mappa',
+    'a word set in the card config wins over the language');
+  eq(root.querySelectorAll('.panetabs button')[1].textContent, 'Impostazioni',
+    'and only that word');
+}
+{
+  const { root } = mountIn('it', { language: 'en' });
+  eq(root.querySelectorAll('.panetabs button')[1].textContent, 'Settings',
+    'language: en keeps the card in English');
+}
+{
+  const { root } = mountIn('xx');
+  eq(root.querySelectorAll('.panetabs button')[1].textContent, 'Settings',
+    'a language the card does not ship falls back to English');
+}
+document.body.innerHTML = '';
 
 /* ---------- no status ---------- */
 {

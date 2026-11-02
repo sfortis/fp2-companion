@@ -107,7 +107,8 @@ type: custom:fp2-companion-card
 | `devices_entity` | `sensor.fp2_companion_devices` | The app's own sensor |
 | `command_root` | `fp2companion` | The app's MQTT prefix |
 | `entities` | `{}` | Overrides for entity ids renamed in the registry, on a pinned card |
-| `text` | English | Every word on the card, for a translation |
+| `language` | the user's | The card's language, like `it`. Empty follows the Home Assistant user's language; English and Italian ship with the card |
+| `text` | per language | Any word on the card, over the language's own |
 
 The card sends its commands to the app over MQTT. At startup the app checks
 that they reach it, and subscribes to its command topics itself when your
