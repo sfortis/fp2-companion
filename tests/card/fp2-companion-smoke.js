@@ -737,6 +737,47 @@ const BOUNDARY = { rangeId: 103, name: 'Boundary', regionType: 3, sensitivity: 1
   eq(root.querySelector('.account .who').textContent, 'Signed in', 'and says so plainly');
 }
 
+/* ---------- keyboard and screen readers ---------- */
+{
+  const { root, card } = mount();
+  const cloud = root.querySelector('.cloud');
+  eq(cloud.tagName, 'BUTTON', 'the cloud is a button, so Tab reaches it');
+  eq(cloud.getAttribute('aria-label'), 'Cloud OK', 'and names the status');
+  eq(root.querySelector('.message').getAttribute('role'), 'status',
+    'the message line is read out when it changes');
+  const tabs = [...root.querySelectorAll('.panetabs button')];
+  eq(root.querySelector('.panetabs').getAttribute('role'), 'tablist', 'the panes are tabs');
+  eq(tabs.map((b) => b.getAttribute('aria-selected')).join(','), 'true,false,false,false',
+    'and the one on show is selected');
+  tabs[1].click();
+  eq(tabs.map((b) => b.getAttribute('aria-selected')).join(','), 'false,true,false,false',
+    'which follows a press');
+  eq(root.querySelector(`#${tabs[1].getAttribute('aria-controls')}`).hidden, false,
+    'and names its pane');
+  eq(segButtons(root, 0).map((b) => b.getAttribute('aria-pressed')).join(','),
+    'true,false,false', 'the lit option is pressed');
+  const toggle = root.querySelector('button.toggle');
+  ok(toggle.getAttribute('role') === 'switch' && toggle.getAttribute('aria-checked') === 'false',
+    'the AI toggle is a switch that says whether it is on');
+  const lhs = root.querySelector('.setting .lhs');
+  ok(lhs.getAttribute('role') === 'button' && lhs.tabIndex === 0,
+    'a setting\'s name opens its dialog from the keyboard too');
+  tabs[0].click();
+  const row = () => [...root.querySelectorAll('.legend .row:not(.head)')]
+    .find((r) => r.querySelector('.nm').textContent === 'Couch');
+  ok(row().tabIndex === 0 && row().getAttribute('aria-pressed') === 'false',
+    'a legend row is reached with Tab');
+  row().dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  eq(row().getAttribute('aria-pressed'), 'true', 'and Enter picks the zone out');
+  ok(row().classList.contains('on'), 'as a press does');
+  eq(row().querySelector('.badge').getAttribute('aria-label'), 'Edit Couch',
+    'its Edit button names the zone');
+  row().querySelector('.badge').dispatchEvent(
+    new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  eq(row().getAttribute('aria-pressed'), 'true', 'Enter on Edit does not pick the row as well');
+  card.remove();
+}
+
 /* ---------- AI person detection and AI learning ---------- */
 {
   const { root, calls } = mount();

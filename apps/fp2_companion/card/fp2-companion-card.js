@@ -29,7 +29,7 @@
  * The grid is 16 columns by 20 rows and a block id is row * 16 + column + 1,
  * both from 0. The owner compared this orientation with the Aqara app, and a
  * 2 by 2 painted top right in the official app came back as 15, 16, 31 and 32.
- * Where the sensor sits on the grid is not known, so it is not drawn.
+ * The sensor is drawn where the app says it sits (_drawSensor).
  *
  * Every FP2 the app serves is listed on sensor.fp2_companion_devices, and the
  * card picks one from a dropdown at the top, remembering the choice in this
@@ -264,7 +264,8 @@ ha-card { overflow: hidden; }
           border-radius: 6px; border: 1px solid var(--divider-color);
           background: var(--secondary-background-color);
           color: var(--primary-text-color); }
-.cloud { display: flex; cursor: pointer; color: var(--secondary-text-color); }
+.cloud { display: flex; cursor: pointer; color: var(--secondary-text-color);
+         border: none; background: none; padding: 0; border-radius: 50%; }
 .head .cloud svg { width: 28px; height: 28px; stroke: none; fill: none; }
 .cloud .shape { fill: currentColor; }
 .cloud .mark { fill: none; stroke: var(--card-background-color, var(--ha-card-background, #fff));
@@ -417,6 +418,21 @@ button.arm { background: var(--error-color, #f44336);
 .legend .badge { font-size: 11px; line-height: 1; padding: 4px 0;
                  border-radius: 10px; width: 40px; }
 .note { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; }
+.legend .row:focus-visible, .setting .lhs:focus-visible {
+  outline: 2px solid var(--primary-color); outline-offset: 1px; }
+/* On a touch screen every control is at least 32 px tall, past the 24 px
+ * WCAG 2.2 asks for; the Edit badge alone was about 20 px. */
+@media (pointer: coarse) {
+  .legend .badge { padding: 10px 0; }
+  .panetabs button, .seg button, .setting .act, .editor button,
+  .banner button, .foot button { min-height: 36px; }
+}
+/* On a phone the type and sensitivity columns give room to the zone's name.
+ * Every row keeps the one template, so they still line up. */
+@media (max-width: 420px) {
+  .legend .row { grid-template-columns: 12px minmax(0, 1fr) 72px 48px 40px; }
+  .seg button { min-width: 0; padding-left: 10px; padding-right: 10px; }
+}
 
 .editor { margin-top: 10px; padding: 10px; border-radius: 8px;
           border: 1px solid var(--divider-color); }
@@ -479,6 +495,20 @@ function el(tag, cls, text) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
   if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/* A non-button that acts on a press, reachable and pressable from the
+ * keyboard as well: Tab to it, Enter or Space to press. */
+function pressable(node, fn) {
+  node.setAttribute('role', 'button');
+  node.tabIndex = 0;
+  node.addEventListener('click', fn);
+  node.addEventListener('keydown', (ev) => {
+    if (ev.target !== node || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+    ev.preventDefault();
+    fn(ev);
+  });
   return node;
 }
 
@@ -929,6 +959,7 @@ class Fp2CompanionCard extends HTMLElement {
     PANES.forEach((key) => {
       r.panes[key].hidden = key !== this._pane;
       r.tabs[key].className = key === this._pane ? 'on' : '';
+      r.tabs[key].setAttribute('aria-selected', String(key === this._pane));
     });
   }
 
@@ -1104,9 +1135,9 @@ class Fp2CompanionCard extends HTMLElement {
     head.appendChild(el('div', 'spacer'));
     /* The cloud says how things stand; the message line under the head says
      * why when it is not green. */
-    r.cloud = el('div', 'cloud');
-    r.cloud.setAttribute('role', 'img');
-    const cloud = svgEl('svg', { viewBox: '0 0 24 24' });
+    /* A button, since a press opens the status entity's dialog. */
+    r.cloud = el('button', 'cloud');
+    const cloud = svgEl('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' });
     cloud.appendChild(svgEl('path', { class: 'shape', d: CLOUD_PATH }));
     r.cloudMark = svgEl('path', { class: 'mark', d: '' });
     cloud.appendChild(r.cloudMark);
@@ -1130,6 +1161,8 @@ class Fp2CompanionCard extends HTMLElement {
       body.appendChild(pick);
     }
     r.message = el('div', 'message', '');
+    /* Read out when it changes: a refusal or a failed sign-in is news. */
+    r.message.setAttribute('role', 'status');
     body.appendChild(r.message);
 
     r.signin = this._buildSignin();
@@ -1145,14 +1178,21 @@ class Fp2CompanionCard extends HTMLElement {
     body.appendChild(main);
     /* Three panes: the map, the device's own settings, and the backups. */
     const tabs = el('div', 'panetabs');
+    tabs.setAttribute('role', 'tablist');
     r.tabs = {};
     r.panes = {};
     PANES.forEach((key) => {
       const b = el('button', '', t.tabs[key]);
+      b.setAttribute('role', 'tab');
+      b.id = `tab-${key}`;
+      b.setAttribute('aria-controls', `pane-${key}`);
       b.addEventListener('click', () => this._selectPane(key));
       tabs.appendChild(b);
       r.tabs[key] = b;
       r.panes[key] = el('div', 'pane');
+      r.panes[key].id = `pane-${key}`;
+      r.panes[key].setAttribute('role', 'tabpanel');
+      r.panes[key].setAttribute('aria-labelledby', `tab-${key}`);
     });
     main.appendChild(tabs);
     PANES.forEach((key) => main.appendChild(r.panes[key]));
@@ -1341,7 +1381,7 @@ class Fp2CompanionCard extends HTMLElement {
     const lhs = el('div', 'lhs');
     lhs.appendChild(el('div', 'name', name));
     lhs.appendChild(el('div', 'sub', hint));
-    lhs.addEventListener('click', () => this._moreInfo(this._ents[key]));
+    pressable(lhs, () => this._moreInfo(this._ents[key]));
     row.appendChild(lhs);
     const seg = el('div', 'seg');
     row.appendChild(seg);
@@ -1357,11 +1397,12 @@ class Fp2CompanionCard extends HTMLElement {
     const lhs = el('div', 'lhs');
     lhs.appendChild(el('div', 'name', t.ai));
     lhs.appendChild(el('div', 'sub', t.ai_hint));
-    lhs.addEventListener('click', () => this._moreInfo(this._ents.ai));
+    pressable(lhs, () => this._moreInfo(this._ents.ai));
     row.appendChild(lhs);
     const toggle = el('button', 'toggle');
     toggle.appendChild(el('span', 'knob'));
     toggle.setAttribute('aria-label', t.ai);
+    toggle.setAttribute('role', 'switch');
     toggle.addEventListener('click', () => {
       const st = this._state('ai');
       if (!st || !this._hass) return;
@@ -1409,6 +1450,7 @@ class Fp2CompanionCard extends HTMLElement {
     }
     const shown = this._pending.ai ? this._pending.ai.option : actual;
     r.ai.toggle.className = `toggle${shown === 'on' ? ' on' : ''}${this._pending.ai ? ' pending' : ''}`;
+    r.ai.toggle.setAttribute('aria-checked', String(shown === 'on'));
     r.ai.toggle.disabled = !st || actual === 'unavailable';
 
     /* With AI on the device ignores sensitivity and reports High. */
@@ -1534,6 +1576,7 @@ class Fp2CompanionCard extends HTMLElement {
       const on = opt === shown;
       ref.buttons[opt].className = on
         ? (this._pending[key] ? 'on pending' : 'on') : '';
+      ref.buttons[opt].setAttribute('aria-pressed', String(on));
       ref.buttons[opt].disabled = !st || st.state === 'unavailable';
     });
   }
@@ -1607,15 +1650,24 @@ class Fp2CompanionCard extends HTMLElement {
       if (this._edit !== null) row.appendChild(el('div', ''));
       if (this._edit === null) {
         const badge = el('button', 'badge', t.edit);
+        /* Read out with the zone's name: a list of plain "Edit" says nothing. */
+        badge.setAttribute('aria-label', `${t.edit} ${z.name}`);
         badge.addEventListener('click', (ev) => {
           ev.stopPropagation();
           this._startEdit(z);
         });
+        badge.addEventListener('keydown', (ev) => ev.stopPropagation());
         row.appendChild(badge);
-        row.addEventListener('click', () => {
+        pressable(row, () => {
           this._focus = this._focus === z.rangeId ? null : z.rangeId;
           this._updateZones();
+          /* The legend is drawn again, so the focus goes to the new row. */
+          const again = [...this._refs.legend.querySelectorAll('.row')]
+            .find((x) => x.dataset.range === String(z.rangeId));
+          if (again) again.focus();
         });
+        row.dataset.range = String(z.rangeId);
+        row.setAttribute('aria-pressed', String(picked));
       }
       r.legend.appendChild(row);
     });
@@ -1880,6 +1932,7 @@ class Fp2CompanionCard extends HTMLElement {
     name.maxLength = 32;
     name.autocomplete = 'off';
     name.value = e.name;
+    name.setAttribute('aria-label', t.name);
     /* Also as the attribute, which is what a serialised render shows. */
     name.setAttribute('value', e.name);
     name.addEventListener('input', () => {
@@ -1898,10 +1951,12 @@ class Fp2CompanionCard extends HTMLElement {
       this._editSeg = {};
       Object.keys(SENSITIVITY).forEach((v) => {
         const b = el('button', Number(v) === e.sensitivity ? 'on' : '', SENSITIVITY[v]);
+        b.setAttribute('aria-pressed', String(Number(v) === e.sensitivity));
         b.addEventListener('click', () => {
           e.sensitivity = Number(v);
           Object.keys(this._editSeg).forEach((k) => {
             this._editSeg[k].className = Number(k) === e.sensitivity ? 'on' : '';
+            this._editSeg[k].setAttribute('aria-pressed', String(Number(k) === e.sensitivity));
           });
           this._refreshEditor();
         });
@@ -1950,6 +2005,7 @@ class Fp2CompanionCard extends HTMLElement {
     const row = el('div', 'field');
     row.appendChild(el('label', '', t.attribute));
     const pick = el('select', '');
+    pick.setAttribute('aria-label', t.attribute);
     attrs.forEach((region) => {
       const holder = region === REGION_DETECTION ? null
         : zones.find((z) => z.regionType === region && z.rangeId !== e.rangeId);
@@ -2001,6 +2057,7 @@ class Fp2CompanionCard extends HTMLElement {
     const row = el('div', 'field');
     row.appendChild(el('label', '', t.type));
     const pick = el('select', '');
+    pick.setAttribute('aria-label', t.type);
     options.forEach((o) => {
       const opt = el('option', '', o.tagName);
       opt.value = o.tagId;
@@ -2017,6 +2074,7 @@ class Fp2CompanionCard extends HTMLElement {
         e.sensitivity = tag.sensitivity;
         Object.keys(this._editSeg || {}).forEach((k) => {
           this._editSeg[k].className = Number(k) === e.sensitivity ? 'on' : '';
+          this._editSeg[k].setAttribute('aria-pressed', String(Number(k) === e.sensitivity));
         });
       }
       this._refreshEditor();
