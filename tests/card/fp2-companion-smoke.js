@@ -130,6 +130,44 @@ function segButtons(root, index) {
   ok(err && err.textContent.includes(E.hub), 'a missing devices sensor is named');
 }
 
+/* A hub that lists no device is a running app that has found none yet. */
+{
+  const { root } = mount({ [E.hub]: hub([]) });
+  const err = root.querySelector('.err');
+  ok(err && err.textContent.includes('devices:') && !err.textContent.includes('running'),
+    'an app with no FP2 yet points to the yaml, not to a stopped app');
+}
+
+/* ---------- entities under an earlier prefix ---------- */
+/* An FP2 listed by serial gets the prefix fp2_b2c3; found over HomeKit later,
+ * the app names it presence_sensor_fp2_b2c3, but the registry keeps the ids
+ * the entities were created with (a live install on 2026-11-02). */
+function rekeyed(prefix, did) {
+  const out = {};
+  Object.entries(states()).forEach(([id, s]) => {
+    out[id.replace(`.${P}_`, `.${prefix}_`)] = s;
+  });
+  const status = out[`sensor.${prefix}_cloud_status`];
+  out[`sensor.${prefix}_cloud_status`] = { ...status,
+    attributes: { ...status.attributes, did } };
+  return out;
+}
+{
+  const { root, calls } = mount(rekeyed('fp2_b2c3', LIVING.did));
+  ok(!root.querySelector('.err'), 'the card finds the entities under their earlier prefix');
+  eq(segButtons(root, 0).find((b) => b.classList.contains('on')).textContent, 'Low',
+    'and shows their values');
+  root.querySelector('.foot button').click();
+  eq(calls[calls.length - 1].data.entity_id, 'button.fp2_b2c3_refresh',
+    'and presses them');
+}
+{
+  const { root } = mount(rekeyed('fp2_b2c3', 'lumi1.000000000000'));
+  const err = root.querySelector('.err');
+  ok(err && err.textContent.includes(E.status) && err.textContent.includes('entities:'),
+    'a status entity of another FP2 is not taken, and the error says what to set');
+}
+
 /* ---------- a healthy card ---------- */
 {
   const { root, calls, card } = mount();
