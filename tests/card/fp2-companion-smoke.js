@@ -23,6 +23,10 @@ Object.assign(global, {
   HTMLElement: dom.window.HTMLElement, customElements: dom.window.customElements,
   CustomEvent: dom.window.CustomEvent,
 });
+/* Node 21 and later have a global navigator whose languages name en-US,
+ * which the sign-in reads for its first country. The checks expect a browser
+ * that names no country, as Node 20 has no navigator at all. */
+Object.defineProperty(global, 'navigator', { value: undefined, configurable: true });
 const SOURCE = fs.readFileSync(CARD, 'utf8');
 /* The crypto helpers are top-level functions of the card, so evaluating the
  * same source once more with a return statement hands them to the test. */
