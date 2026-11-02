@@ -125,6 +125,28 @@ function segButtons(root, index) {
   return [...root.querySelectorAll('.seg')[index].querySelectorAll('button')];
 }
 
+/* ---------- the card picker and the sections view ---------- */
+{
+  const entry = window.customCards.find((c) => c.type === 'fp2-companion-card');
+  ok(entry && entry.preview === true, 'the picker shows a live preview');
+  ok(entry && /^https:\/\/github\.com\/sfortis\/fp2-companion/.test(entry.documentationURL),
+    'and links the documentation');
+  const grid = new Card().getGridOptions();
+  ok(grid.columns === 12 && grid.rows === 'auto' && grid.min_columns === 6,
+    'a sections view gives it the full width and a height that follows it');
+  const form = Card.getConfigForm();
+  eq(form.schema.map((s) => s.name).join(','), 'title,device',
+    'the visual editor sets the title and the pin');
+  form.assertConfig({ type: 'custom:fp2-companion-card', title: 'Living' });
+  let threw = false;
+  try {
+    form.assertConfig({ type: 'custom:fp2-companion-card', entities: { status: 'sensor.x' } });
+  } catch (e) {
+    threw = true;
+  }
+  ok(threw, 'and leaves a config with entity overrides to YAML');
+}
+
 /* ---------- no status ---------- */
 {
   const card = new Card();

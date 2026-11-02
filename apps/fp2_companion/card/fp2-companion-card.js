@@ -796,6 +796,34 @@ class Fp2CompanionCard extends HTMLElement {
     return { type: 'custom:fp2-companion-card' };
   }
 
+  /* The visual editor: the title and the pin, the two options a person sets
+   * by hand. Entity overrides and words are YAML only, so a config that has
+   * them opens in the YAML editor, where nothing of them can be lost. */
+  static getConfigForm() {
+    const labels = { title: 'Title', device: 'FP2' };
+    const helpers = { device: 'Pins the card to one FP2, by its serial, entity prefix '
+      + 'or name, and hides the picker. Empty shows every FP2.' };
+    return {
+      schema: [
+        { name: 'title', selector: { text: {} } },
+        { name: 'device', selector: { text: {} } },
+      ],
+      computeLabel: (s) => labels[s.name],
+      computeHelper: (s) => helpers[s.name],
+      assertConfig: (config) => {
+        const yamlOnly = ['entities', 'text'].filter((k) => config[k] !== undefined);
+        if (yamlOnly.length) throw new Error(`${yamlOnly.join(', ')} is set in YAML`);
+      },
+    };
+  }
+
+  /* In a sections view the card takes the full width by default, since the
+   * map and the legend need it, and never less than half; its height follows
+   * its content. */
+  getGridOptions() {
+    return { columns: 12, rows: 'auto', min_columns: 6 };
+  }
+
   setConfig(config) {
     this._config = deepDefaults(config, DEFAULTS);
     this._refs = null;
@@ -2248,6 +2276,8 @@ window.customCards.push({
   type: 'fp2-companion-card',
   name: 'FP2 Companion Card',
   description: 'An Aqara FP2\'s settings and zone editor, from the fp2_companion app.',
+  preview: true,
+  documentationURL: 'https://github.com/sfortis/fp2-companion#2-the-card',
 });
 
 console.info(`%c FP2-COMPANION-CARD %c ${CARD_VERSION} `,
