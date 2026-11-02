@@ -138,6 +138,10 @@ const DEFAULTS = {
     new_zone_name: 'Detection Zone {n}',
     edit_hint: 'Tap or drag on the map to add or remove blocks.',
     edge_hint: 'Tap or drag on the map to add or remove blocks of the edge.',
+    edge_open: '{n} blocks outside the edge still count as the room. '
+      + 'Edit the edge and press Fill outside.',
+    edge_open_draft: '{n} blocks are shut off from the room but still count as it.',
+    fill_outside: 'Fill outside',
     entrance_hint: 'Tap or drag on the map to add or remove blocks. Blocks of the interference zone are left out of an entrance zone.',
     attribute: 'Attribute',
     attr_detection: 'Detection zone',
@@ -359,6 +363,8 @@ button.arm { background: var(--error-color, #f44336);
               opacity: .6; pointer-events: none; }
 .map .cell { stroke: none; pointer-events: none; }
 .map .cell.dim { opacity: .18; }
+/* Blocks shut off from the room by the edge, which the FP2 still looks at. */
+.map .open { fill: var(--warning-color, #ffa726); opacity: .3; pointer-events: none; }
 .map .hit { fill: transparent; }
 .map .hit.on { stroke: var(--primary-text-color); stroke-width: .6; }
 .map .label { font-size: 5px; font-weight: 600; text-anchor: middle;
@@ -439,6 +445,7 @@ button.arm { background: var(--error-color, #f44336);
   .legend .row { grid-template-columns: 12px minmax(0, 1fr) 72px 48px 40px; }
   .seg button { min-width: 0; padding-left: 10px; padding-right: 10px; }
 }
+.edgewarn { font-size: 12px; color: var(--warning-color, #ffa726); margin: 6px 0 2px; }
 
 .editor { margin-top: 10px; padding: 10px; border-radius: 8px;
           border: 1px solid var(--divider-color); }
@@ -639,6 +646,41 @@ function zoneSensitivity(zone) {
 /* Block id to cell, both from 0. The same arithmetic as zone_model.cell(). */
 function blockCell(block, columns) {
   return { row: Math.floor((block - 1) / columns), col: (block - 1) % columns };
+}
+
+/* The blocks that count as the room but are shut off from it. The FP2 looks
+ * at every block that is not in the edge, so an edge drawn as a frame around
+ * the room leaves everything outside the frame in the room (seen on
+ * 2026-11-02: a frame of 25 blocks left 239 blocks outside it looked at, and
+ * a light came on for someone walking there). The room is every block outside
+ * the edge that joins one of `seeds` side by side; the rest is returned.
+ * Without a seed outside the edge there is no telling, and nothing is
+ * returned. */
+function shutOff(edge, seeds, grid) {
+  const cols = grid.columns;
+  const total = cols * grid.rows;
+  const wall = new Set(edge);
+  const queue = [...new Set(seeds)].filter((b) => b >= 1 && b <= total && !wall.has(b));
+  if (!queue.length) return [];
+  const room = new Set(queue);
+  while (queue.length) {
+    const b = queue.pop();
+    const { row, col } = blockCell(b, cols);
+    const next = [];
+    if (col > 0) next.push(b - 1);
+    if (col < cols - 1) next.push(b + 1);
+    if (row > 0) next.push(b - cols);
+    if (row < grid.rows - 1) next.push(b + cols);
+    next.forEach((n) => {
+      if (!wall.has(n) && !room.has(n)) {
+        room.add(n);
+        queue.push(n);
+      }
+    });
+  }
+  const out = [];
+  for (let b = 1; b <= total; b += 1) if (!wall.has(b) && !room.has(b)) out.push(b);
+  return out;
 }
 
 /* ---------- the password, encrypted in the browser ---------- */
@@ -1322,6 +1364,10 @@ class Fp2CompanionCard extends HTMLElement {
     r.liveBar.appendChild(r.liveText);
     r.liveBar.hidden = true;
     zones.appendChild(r.liveBar);
+    r.edgeWarn = el('div', 'edgewarn', '');
+    r.edgeWarn.setAttribute('role', 'status');
+    r.edgeWarn.hidden = true;
+    zones.appendChild(r.edgeWarn);
     r.editor = el('div', 'editor');
     zones.appendChild(r.editor);
     r.legend = el('div', 'legend');
@@ -1699,6 +1745,7 @@ class Fp2CompanionCard extends HTMLElement {
     r.banner.innerHTML = '';
     r.editor.hidden = this._edit === null;
     r.banner.hidden = this._preview === null;
+    r.edgeWarn.hidden = true;
 
     this._liveLayer = null;
     if (this._preview !== null) {
@@ -1769,6 +1816,9 @@ class Fp2CompanionCard extends HTMLElement {
     const overlaps = this._overlaps(zones);
     const notes = [];
     if (overlaps.size) notes.push(tpl(t.overlap, { n: overlaps.size }));
+    const open = this._edit === null ? this._openBlocks(zones, grid) : [];
+    r.edgeWarn.textContent = open.length ? tpl(t.edge_open, { n: open.length }) : '';
+    r.edgeWarn.hidden = !open.length;
     if (this._edit === null) notes.push(t.legend_hint);
     r.note.textContent = notes.join(' · ');
   }
@@ -1787,6 +1837,43 @@ class Fp2CompanionCard extends HTMLElement {
       }
     });
     return colours;
+  }
+
+  /* The blocks the saved edge leaves shut off from the room. */
+  _openBlocks(zones, grid) {
+    const edge = zones.find((z) => z.regionType === REGION_EDGE);
+    return edge ? shutOff(edge.blockList || [], this._roomSeeds(zones, grid), grid) : [];
+  }
+
+  _drawOpen(blocks, cols) {
+    if (!this._openLayer) return;
+    this._openLayer.innerHTML = '';
+    blocks.forEach((b) => {
+      const { row, col } = blockCell(b, cols);
+      this._openLayer.appendChild(svgEl('rect', { class: 'open', x: col * CELL,
+        y: row * CELL, width: CELL, height: CELL }));
+    });
+  }
+
+  /* Where the room surely is: the blocks around the sensor and the blocks of
+   * every detection and entrance zone, which the Aqara app only lets a person
+   * draw inside the room. */
+  _roomSeeds(zones, grid) {
+    const seeds = [];
+    zones.filter((z) => z.regionType === REGION_DETECTION
+      || z.regionType === REGION_ENTRANCE)
+      .forEach((z) => seeds.push(...(z.blockList || [])));
+    const at = this._za && this._za.sensor;
+    const col = Number(at && at.col);
+    const row = Number(at && at.row);
+    if (Number.isFinite(col) && Number.isFinite(row)) {
+      [col - 1, col].forEach((c) => [row - 1, row].forEach((r) => {
+        if (c >= 0 && c < grid.columns && r >= 0 && r < grid.rows) {
+          seeds.push(r * grid.columns + c + 1);
+        }
+      }));
+    }
+    return seeds;
   }
 
   /* The edge is left out: it is the space around the room, not a zone that
@@ -1854,6 +1941,10 @@ class Fp2CompanionCard extends HTMLElement {
     for (let rr = 0; rr <= rows; rr += 1) lines += `M0 ${rr * CELL}H${w}`;
     svg.appendChild(svgEl('path', { class: 'grid', d: lines }));
     svg.appendChild(svgEl('rect', { class: 'frame', x: 0, y: 0, width: w, height: h }));
+    this._openLayer = svgEl('g', {});
+    svg.appendChild(this._openLayer);
+    this._drawOpen(edit && edit.regionType === REGION_EDGE ? this._draftShutOff()
+      : (edit ? [] : this._openBlocks(zones, grid)), cols);
     this._drawSensor(svg, defs, w, h);
 
     if (edit) {
@@ -2071,6 +2162,14 @@ class Fp2CompanionCard extends HTMLElement {
     const cancel = el('button', '', t.cancel);
     cancel.addEventListener('click', () => this._cancelEdit());
     btns.appendChild(cancel);
+    /* Puts every block shut off from the room into the edge, so a frame
+     * drawn around the room becomes the edge the FP2 expects. */
+    this._fillBtn = null;
+    if (e.regionType === REGION_EDGE) {
+      this._fillBtn = el('button', '', t.fill_outside);
+      this._fillBtn.addEventListener('click', () => this._fillOutside());
+      btns.appendChild(this._fillBtn);
+    }
     btns.appendChild(el('span', 'spacer'));
     if (e.rangeId !== null && detection && from === REGION_DETECTION) {
       btns.appendChild(armedButton(t.delete, t.confirm, () => {
@@ -2186,13 +2285,40 @@ class Fp2CompanionCard extends HTMLElement {
     if (e.regionType !== from && names[e.regionType]) {
       this._editInfo.textContent = tpl(t.attr_change_hint, { attr: names[e.regionType] });
     } else if (e.regionType === REGION_EDGE) {
-      this._editInfo.textContent = t.edge_hint;
+      const open = this._draftShutOff();
+      this._editInfo.textContent = open.length
+        ? `${t.edge_hint} ${tpl(t.edge_open_draft, { n: open.length })}` : t.edge_hint;
+      const grid = (this._za && this._za.grid) || DEFAULT_GRID;
+      this._drawOpen(open, grid.columns);
     } else if (e.regionType === REGION_ENTRANCE) {
       this._editInfo.textContent = t.entrance_hint;
     } else {
       this._editInfo.textContent = t.edit_hint;
     }
     this._saveBtn.disabled = !e.blocks.length || !e.name.trim() || !this._changed();
+    if (this._fillBtn) this._fillBtn.disabled = !this._draftShutOff().length;
+  }
+
+  /* The blocks the edge being drawn leaves shut off from the room. */
+  _draftShutOff() {
+    const e = this._edit;
+    const zones = ((this._za && this._za.zones) || []).filter((z) => z.rangeId !== e.rangeId);
+    const grid = (this._za && this._za.grid) || DEFAULT_GRID;
+    return shutOff(e.blocks, this._roomSeeds(zones, grid), grid);
+  }
+
+  _fillOutside() {
+    const e = this._edit;
+    const open = this._draftShutOff();
+    if (!e || !open.length) return;
+    e.blocks = e.blocks.concat(open);
+    const zones = (this._za && this._za.zones) || [];
+    const colour = this._zoneColours(zones).get(e.rangeId);
+    open.forEach((b) => {
+      const hit = this._hits && this._hits.get(b);
+      if (hit) this._styleHit(hit, true, colour);
+    });
+    this._refreshEditor();
   }
 
   _saveEdit() {
