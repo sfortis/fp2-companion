@@ -6,7 +6,7 @@ This app exposes them as MQTT discovery entities and feeds the zone card.
 Plan and every owner decision: docs/DESIGN.md
 
 One app serves every FP2 (decision 17). It finds them in Home Assistant as
-HomeKit devices of model PS-S02D or PS-T02E, so nothing about a device is
+HomeKit devices of model PS-S02D, PS-S02E or PS-T02E, so nothing about a device is
 written in the yaml: the cloud device id comes from the serial number, the
 entity id prefix from the device's original name (which its HomeKit entity ids
 were built from), and the area from the device. A yaml list of serials covers
@@ -119,15 +119,26 @@ STATUS_TEXT = {
     STATUS_REFUSED: "The command was refused.",
 }
 
-# Every FP2 Home Assistant knows over HomeKit. `original` is the name the
+# The HomeKit models of an FP2. Aqara's spec page lists PS-S02D and PS-S02E,
+# which differ only in what is in the box, and a user reported PS-T02E.
+FP2_MODELS = ("PS-S02D", "PS-S02E", "PS-T02E")
+# A model in these families that is not in FP2_MODELS is probably an FP2
+# variant nobody has reported yet, so the app says it skipped one. Other
+# Aqara PS models (PS-S03D is the FP1E, PS-S04D the FP300) can reach
+# HomeKit through an Aqara hub and are skipped without a word.
+FP2_MODEL_FAMILIES = ("PS-S02", "PS-T02")
+
+# Every Aqara PS device Home Assistant knows over HomeKit, with its model;
+# parse_discovery decides which of them are FP2s. `original` is the name the
 # integration gave the device, which its entity ids were built from; `name`
-# is the one a person may have given it since. An FP2 reports its HomeKit
-# model as PS-S02D or, on some units, PS-T02E.
+# is the one a person may have given it since.
 DISCOVERY_TEMPLATE = """{%- set ns = namespace(out=[]) -%}
 {%- for d in integration_entities('homekit_controller') | map('device_id')
       | reject('none') | unique -%}
-  {%- if device_attr(d, 'model') in ['PS-S02D', 'PS-T02E'] -%}
+  {%- set model = device_attr(d, 'model') -%}
+  {%- if model is string and model.startswith('PS-') -%}
     {%- set ns.out = ns.out + [{'serial': device_attr(d, 'serial_number'),
+        'model': model,
         'original': device_attr(d, 'name'),
         'name': device_attr(d, 'name_by_user') or device_attr(d, 'name'),
         'area': area_name(d)}] -%}
@@ -147,13 +158,15 @@ def parse_discovery(found, manual=(), exclude=()):
     """The devices to serve, from the discovery rows and the yaml.
 
     Each is {key, did, name, prefix, area}. The key is the serial in lower
-    case and names the device in MQTT topics. A row whose serial is not an
-    FP2 serial is skipped, an excluded serial is dropped, and a manual serial
-    already found is not added twice.
+    case and names the device in MQTT topics. A row whose model is not an
+    FP2 model or whose serial is not an FP2 serial is skipped, an excluded
+    serial is dropped, and a manual serial already found is not added twice.
     """
     skip = {str(s).strip().lower() for s in exclude}
     out = {}
     for row in found or []:
+        if row.get("model") not in FP2_MODELS:
+            continue
         try:
             did = did_from_serial(row.get("serial"))
         except ValueError:
@@ -173,6 +186,18 @@ def parse_discovery(found, manual=(), exclude=()):
         out.setdefault(key, {"key": key, "did": did, "name": name,
                              "prefix": slugify(name), "area": None})
     return [d for k, d in sorted(out.items()) if k not in skip]
+
+
+def unknown_fp2_models(found):
+    """The rows whose model looks like an FP2 variant that is not in
+    FP2_MODELS, as {model: device name}, so the app can say what it skipped."""
+    out = {}
+    for row in found or []:
+        model = row.get("model")
+        if (isinstance(model, str) and model not in FP2_MODELS
+                and model.startswith(FP2_MODEL_FAMILIES)):
+            out.setdefault(model, row.get("name") or row.get("original"))
+    return out
 
 
 class Fp2Device:
@@ -829,6 +854,8 @@ class Fp2Companion(hass.Hass):
                             if isinstance(p, (list, tuple)) and len(p) == 2]
         self._manual = a.get("devices") or []
         self._exclude = a.get("exclude") or []
+        # A skipped model is logged once per run, not on every retry.
+        self._warned_models = set()
         self._now = time.time
 
         # Every cloud call goes through this lock. AppDaemon already runs one
@@ -969,6 +996,13 @@ class Fp2Companion(hass.Hass):
             self.log(f"FP2 discovery failed: {type(exc).__name__}: {exc}",
                      level="WARNING")
             found = []
+        for model, name in unknown_fp2_models(found).items():
+            if model not in self._warned_models:
+                self._warned_models.add(model)
+                self.log(f"skipped {name}: HomeKit model {model} is not a "
+                         f"known FP2 model ({', '.join(FP2_MODELS)}). If it "
+                         "is an FP2, please open an issue with the model.",
+                         level="WARNING")
         for info in parse_discovery(found, self._manual, self._exclude):
             if info["key"] not in self.devices:
                 device = Fp2Device(self, info)

@@ -21,9 +21,11 @@ T = f"fp2companion/{KEY}"
 
 # What the discovery template returned live on 2026-10-30. The Office FP2
 # was renamed in Home Assistant; its HomeKit entity ids kept the original name.
-LIVING = {"serial": "54EF44A1B2C3", "original": "Presence-Sensor-FP2-B2C3",
+LIVING = {"serial": "54EF44A1B2C3", "model": "PS-S02D",
+          "original": "Presence-Sensor-FP2-B2C3",
           "name": "Presence-Sensor-FP2-B2C3", "area": "Living Room"}
-OFFICE = {"serial": "54EF44D4E5F6", "original": "Presence-Sensor-FP2-E5F6",
+OFFICE = {"serial": "54EF44D4E5F6", "model": "PS-T02E",
+          "original": "Presence-Sensor-FP2-E5F6",
            "name": "Motion Sensor - Office", "area": "Office"}
 OFFICE_DID = "lumi1.54ef44d4e5f6"
 
@@ -245,8 +247,7 @@ def test_the_device_is_found_in_home_assistant(fp2):
     app, world = fp2()
     app.start()
     assert DID in app.dids
-    assert "PS-S02D" in app.templates[0]
-    assert "PS-T02E" in app.templates[0]
+    assert "homekit_controller" in app.templates[0]
     cfg = discovery(world, "select", "sensitivity")
     assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
     assert cfg["device"]["suggested_area"] == "Living Room"
@@ -1158,6 +1159,34 @@ def test_a_yaml_serial_adds_a_device_and_exclude_drops_one(fp2):
 def test_parse_discovery_skips_what_is_not_an_fp2(fp2):
     rows = [{"serial": None}, {"serial": "not a serial"}, LIVING]
     assert [d["key"] for d in fp2.mod.parse_discovery(rows)] == [KEY]
+
+
+def test_parse_discovery_serves_only_the_fp2_models(fp2):
+    rows = [dict(LIVING, model="PS-S02E"), dict(OFFICE, model="PS-S03D"),
+            {k: v for k, v in LIVING.items() if k != "model"}]
+    assert [d["key"] for d in fp2.mod.parse_discovery(rows)] == [KEY]
+    assert [d["key"] for d in fp2.mod.parse_discovery([OFFICE])] == [
+        "54ef44d4e5f6"]
+
+
+def test_an_unknown_fp2_variant_is_logged_once(fp2):
+    variant = dict(OFFICE, model="PS-S02F")
+    app, world = fp2(devices=[LIVING, variant])
+    app.start()
+    assert set(app.devices) == {KEY}
+    cmd(app, "rescan")
+    warned = [line for line in world.logs if "PS-S02F" in line]
+    assert len(warned) == 1
+    assert "Motion Sensor - Office" in warned[0]
+
+
+def test_other_aqara_ps_sensors_are_skipped_quietly(fp2):
+    fp1e = dict(OFFICE, model="PS-S03D")
+    fp300 = dict(OFFICE, serial="54EF44AABBCC", model="PS-S04D")
+    app, world = fp2(devices=[LIVING, fp1e, fp300])
+    app.start()
+    assert set(app.devices) == {KEY}
+    assert not [line for line in world.logs if "HomeKit model" in line]
 
 
 # ------------------------------------------------------------ review fixes
