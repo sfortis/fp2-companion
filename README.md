@@ -127,7 +127,10 @@ The card has four tabs.
 
 - **Zones** shows the map, the live dots and the legend. Press a zone to
   pick it out on the map, or **Edit** to change it. Editing paints blocks by
-  tapping or dragging. **Delete** needs a second press.
+  tapping or dragging. **Delete** needs a second press. The FP2 looks at
+  every block outside the room's edge, so an edge drawn as a frame around
+  the room leaves everything beyond the frame in the room. The card says so,
+  and **Fill outside** in the edge's editor adds those blocks to the edge.
 - **Settings** has AI person detection, sensitivity, approach distance and
   AI learning. While AI person detection is on, the sensor sets its own
   sensitivity and ignores changes to it, so the control is disabled.

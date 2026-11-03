@@ -30,9 +30,9 @@ Object.defineProperty(global, 'navigator', { value: undefined, configurable: tru
 const SOURCE = fs.readFileSync(CARD, 'utf8');
 /* The crypto helpers are top-level functions of the card, so evaluating the
  * same source once more with a return statement hands them to the test. */
-const { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry } = new Function(
+const { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff } = new Function(
   `${SOURCE.replace("customElements.define('fp2-companion-card', Fp2CompanionCard);", '')}`
-  + '\nreturn { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry };')();
+  + '\nreturn { md5Hex, rsaPkcs1v15, encryptPassword, defaultCountry, shutOff };')();
 new Function(SOURCE)();
 const Card = customElements.get('fp2-companion-card');
 
@@ -556,6 +556,78 @@ function typePick(root) {
   eq(Object.keys(sent).sort().join(','), 'blockList,rangeId', 'with its blocks and its id only');
   eq(sent.blockList.length, 287, 'one block fewer');
   ok(!sent.blockList.includes(135), 'without block 135');
+}
+
+/* An edge drawn as a frame around the room (a live FP2 on 2026-11-02): a
+ * column of edge blocks either side of the room and a row below it. Every
+ * block outside the frame still counts as the room. */
+const FRAME = [5, 69, 133, 134, 135, 136, 137, 138, 139, 140, 13, 77, 141, 21, 85,
+  29, 93, 37, 101, 45, 109, 53, 117, 61, 125];
+function frameZones() {
+  return [
+    { rangeId: 1, name: 'Garden Door', regionType: 0, sensitivity: 3, tagId: 'custom_',
+      tagName: '', blockList: [8, 9] },
+    { rangeId: 102, name: 'Exits', regionType: 2, sensitivity: 1, tagId: 'custom_',
+      tagName: '', blockList: [119, 120, 121] },
+    { rangeId: 103, name: 'Frame', regionType: 3, sensitivity: 1, tagId: 'custom_',
+      tagName: '', colorId: 5, blockList: FRAME.slice() },
+  ];
+}
+{
+  const grid = { columns: 16, rows: 20 };
+  eq(shutOff(FRAME, [8], grid).length, 239, 'a frame leaves the blocks outside it shut off');
+  ok(!shutOff(FRAME, [8], grid).includes(70), 'and not the room inside it');
+  eq(shutOff(FRAME, [], grid).length, 0, 'with no seed nothing is told');
+  eq(shutOff(FRAME, FRAME, grid).length, 0, 'nor with seeds only on the edge');
+  eq(shutOff(FRAME.concat(shutOff(FRAME, [8], grid)), [8], grid).length, 0,
+    'once filled, nothing is shut off');
+  eq(shutOff([], [8], grid).length, 0, 'and no edge shuts nothing off');
+}
+{
+  const { root } = mount(typedStates(frameZones()));
+  const warn = root.querySelector('.edgewarn');
+  ok(!warn.hidden && warn.textContent.includes('239 blocks outside the edge'),
+    'the Zones pane warns that the frame leaves blocks in the room');
+  eq(root.querySelectorAll('svg.map rect.open').length, 239, 'and marks them on the map');
+}
+{
+  const { root, calls } = mount(typedStates(frameZones()));
+  editRow(root, 'Frame');
+  const editor = root.querySelector('.editor');
+  const fill = [...editor.querySelectorAll('button')].find((b) => b.textContent === 'Fill outside');
+  ok(fill && !fill.disabled, 'the edge editor offers Fill outside');
+  ok(editor.querySelector('.note').textContent.includes('239 blocks are shut off'),
+    'and says how many blocks it would add');
+  eq(root.querySelectorAll('svg.map rect.open').length, 239, 'the editor marks them too');
+  fill.click();
+  ok(fill.disabled, 'once filled there is nothing more to fill');
+  eq(root.querySelectorAll('svg.map rect.open').length, 0, 'and nothing is marked');
+  eq(root.querySelectorAll('svg.map rect.hit.on').length, 264, 'the map shows the new edge');
+  saveButton(root).click();
+  const sent = JSON.parse(lastPublish(calls).payload);
+  eq(Object.keys(sent).sort().join(','), 'blockList,rangeId', 'the edge is saved with its blocks only');
+  eq(sent.blockList.length, 264, 'every block outside the room');
+  ok(!sent.blockList.includes(8) && !sent.blockList.includes(120),
+    'and none of the zones inside it');
+}
+{
+  /* A closed edge, like the Mancave's, is left alone. */
+  const room = new Set();
+  for (let r = 0; r < 8; r += 1) for (let c = 6; c < 10; c += 1) room.add(r * 16 + c + 1);
+  const outside = [];
+  for (let b = 1; b <= 320; b += 1) if (!room.has(b)) outside.push(b);
+  const zones = [
+    { rangeId: 1, name: 'Desk', regionType: 0, sensitivity: 1, tagId: '3.3',
+      tagName: 'Desk', blockList: [23, 24, 39, 40] },
+    { rangeId: 103, name: 'Edge', regionType: 3, sensitivity: 1, tagId: 'custom_',
+      tagName: '', colorId: 5, blockList: outside },
+  ];
+  const { root } = mount(typedStates(zones));
+  ok(root.querySelector('.edgewarn').hidden, 'a closed edge gets no warning');
+  eq(root.querySelectorAll('svg.map rect.open').length, 0, 'and no block is marked');
+  editRow(root, 'Edge');
+  const fill = [...root.querySelectorAll('.editor button')].find((b) => b.textContent === 'Fill outside');
+  ok(fill.disabled, 'and nothing to fill');
 }
 
 function attrPick(root) {
