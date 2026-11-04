@@ -13,7 +13,8 @@ Aqara app shows them.
 The FP2 reports presence to Home Assistant locally over HomeKit, but it has
 no local channel for its settings, which normally means the Aqara phone app.
 FP2 Companion is an [AppDaemon](https://appdaemon.readthedocs.io/) app and a
-Lovelace card that make those settings available in Home Assistant through
+[Lovelace card](https://github.com/sfortis/fp2-companion-card) that make
+those settings available in Home Assistant through
 the same cloud API the Aqara app uses. Presence keeps flowing over HomeKit
 and does not depend on the cloud.
 
@@ -89,26 +90,27 @@ suit most homes.
 
 ### 2. The card
 
-The card ships with the app, so HACS installs and updates both. When the app
-starts it copies the card into Home Assistant's `www` folder and adds the
-dashboard resource for it, and after an update it changes the resource's
-`?v=` so browsers load the new card. A resource for the card that you added
-by hand is moved to the new copy rather than doubled. Add the card to a
-dashboard:
+The card is its own HACS repository,
+[FP2 Companion Card](https://github.com/sfortis/fp2-companion-card). In HACS,
+add `https://github.com/sfortis/fp2-companion-card` as a custom repository of
+the type **Dashboard** and download it. HACS adds its dashboard resource and
+updates it. Then add the card to a dashboard:
 
 ```yaml
 type: custom:fp2-companion-card
 ```
 
-| Option | Default | Meaning |
-|---|---|---|
-| `title` | `Presence sensor` | The card's title |
-| `device` | none | Pins the card to one FP2, by its serial, entity prefix, device id or name, and hides the device picker |
-| `devices_entity` | `sensor.fp2_companion_devices` | The app's own sensor |
-| `command_root` | `fp2companion` | The app's MQTT prefix |
-| `entities` | `{}` | Overrides for entity ids renamed in the registry, on a pinned card |
-| `language` | the user's | The card's language, like `it`. Empty follows the Home Assistant user's language; English and Italian ship with the card |
-| `text` | per language | Any word on the card, over the language's own |
+Its options are in the card's README.
+
+**Updating from version 1.3 or earlier.** Those versions copied the card
+into Home Assistant's `www/fp2-companion/` folder and added a dashboard
+resource for it themselves. The app no longer does either, so that copy
+stops receiving updates. Install the card from HACS, then delete the
+resource whose URL starts with `/local/fp2-companion/` and the folder
+`www/fp2-companion/`. The AppDaemon log reminds you while the folder is
+still there. The
+[card's README](https://github.com/sfortis/fp2-companion-card#moving-from-the-card-the-app-installed)
+has the steps.
 
 The card sends its commands to the app over MQTT. At startup the app checks
 that they reach it, and subscribes to its command topics itself when your
@@ -124,26 +126,10 @@ before it expires, and the password is not needed again.
 
 ## Using It
 
-The card has four tabs.
-
-- **Zones** shows the map, the live dots and the legend. Press a zone to
-  pick it out on the map, or **Edit** to change it. Editing paints blocks by
-  tapping or dragging. **Delete** needs a second press. The FP2 looks at
-  every block outside the room's edge, so an edge drawn as a frame around
-  the room leaves everything beyond the frame in the room. The card says so,
-  and **Fill outside** in the edge's editor adds those blocks to the edge.
-- **Settings** has AI person detection, sensitivity, approach distance and
-  AI learning. While AI person detection is on, the sensor sets its own
-  sensitivity and ignores changes to it, so the control is disabled.
-- **Backups** lists the zone backups. Choosing one previews it on the map,
-  and **Restore** needs a second press.
-- **Account** shows the Aqara account, until when the session is valid,
-  **Change login** and **Log out**, which needs a second press.
-
-The cloud icon at the top shows the app's status: green with a check when
-all is well, amber with an exclamation mark for a warning, and red with a
-cross when there is no session. The line under it explains anything that is
-not green.
+The card has four tabs: **Zones**, **Settings**, **Backups** and
+**Account**. The
+[card's README](https://github.com/sfortis/fp2-companion-card#using-it)
+describes each one.
 
 ## Live View
 
@@ -160,9 +146,6 @@ it works.
   app identity. Such an account needs a working pair of its own, as
   `aqara_app_id` and `aqara_app_key` in the add-on's `secrets.yaml`, with
   `app_id` and `app_key` uncommented in `fp2_companion.yaml`.
-- The card installs its own dashboard resource only when Home Assistant runs
-  with a Supervisor (Home Assistant OS or Supervised) and the resources are
-  managed in the UI. Otherwise the AppDaemon log names the resource to add.
 - A zone changes its attribute only from or to detection. To turn an
   entrance zone into the edge, make it a detection zone first.
 
@@ -176,8 +159,8 @@ it works.
 - The app writes only a fixed list of settings and values, and refuses
   anything else before it reaches the network.
 - Zone backups are in `/share/appdaemon/fp2_companion/backups/<device id>/`.
-- The app uses the add-on's Supervisor token for one thing only: to read the
-  dashboard resources and create or update the card's own.
+- The app writes nothing outside its own state folder. It does not use the
+  add-on's Supervisor token.
 
 ## Entities
 
@@ -193,14 +176,11 @@ creates `sensor.fp2_companion_devices`, which lists every FP2 it serves.
 
 ```
 python3 -m pytest tests
-NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-smoke.js
 ```
 
-The Python tests need only `pytest`. The card test needs `jsdom` installed
-globally, and Python's `cryptography` for its RSA check.
-`tests/card/fp2-companion-render.js` renders the card from a live Home Assistant
-into an HTML file, for a look in a headless browser. `scripts/deploy.sh`
-deploys to a Home Assistant OS host over SSH.
+The tests need only `pytest`. The card and its tests are in the
+[card's repository](https://github.com/sfortis/fp2-companion-card).
+`scripts/deploy.sh` deploys the app to a Home Assistant OS host over SSH.
 
 [docs/DESIGN.md](docs/DESIGN.md) explains how the app is built and why, and
 [docs/PROTOCOL.md](docs/PROTOCOL.md) describes the cloud API it uses.

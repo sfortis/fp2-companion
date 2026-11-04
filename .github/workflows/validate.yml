@@ -24,14 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
       - name: Install
         run: |
           pip install pytest pyyaml cryptography
-          npm install -g jsdom
       - name: Python tests
         run: python -m pytest tests -q
-      - name: Card smoke test
-        run: NODE_PATH="$(npm root -g)" node tests/card/fp2-companion-smoke.js

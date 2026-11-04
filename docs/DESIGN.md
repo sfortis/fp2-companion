@@ -95,7 +95,8 @@ not depend on the cloud.
     through AppDaemon's MQTT plugin, and the card listens through Home
     Assistant's `mqtt/subscribe`. Nothing reaches the recorder, but the
     live view needs an admin user.
-22. The card ships inside the app folder, because HACS downloads an
+22. Superseded by decision 25 on 2026-11-04. Up to version 1.3 the card
+    shipped inside the app folder, because HACS downloads an
     AppDaemon repository's app folder and nothing else, and a second
     repository would let the card and the app drift apart. At startup the
     app copies the card into Home Assistant's `www/fp2-companion/` and
@@ -125,6 +126,18 @@ not depend on the cloud.
     or edge that appeared or went away since the backup is paired with the
     detection zone it shares the most blocks with, and that zone's
     attribute is changed instead of creating or deleting one.
+25. The card is a HACS plugin repository of its own,
+    [fp2-companion-card](https://github.com/sfortis/fp2-companion-card),
+    since 2026-11-04. The HACS default catalog does not accept an app that
+    copies files into `www` or writes dashboard resources, so HACS now
+    downloads the card, updates it and registers its resource. The app
+    writes nothing outside its own state folder and no longer uses the
+    Supervisor token. At startup it only looks for the copy that versions
+    up to 1.3 left in `www/fp2-companion/`, and when it finds one it logs
+    how to remove it and the resource. It deletes nothing, because the
+    folder and the resource may hold a person's own changes. The card
+    defines its element only once, so the old copy and the new one can
+    both load while a person moves over.
 
 ## Modules
 
@@ -146,10 +159,6 @@ Assistant side.
   thread and event loop. It handles the leases, subscribes and renews every
   watched device, writes the heartbeat, reconnects with a backoff, and
   parses each push into targets with their place on the grid.
-- `card_install.py` copies the card into Home Assistant's `www` folder and
-  plans and makes the change to its dashboard resource (decision 22). The
-  plan is pure and the websocket client is injected, so the tests need no
-  Home Assistant.
 - `command_topics.py` probes the MQTT command topics and subscribes to the
   silent ones (decision 23).
 - `fp2_companion.py` is the AppDaemon app: discovery, commands, reads, writes

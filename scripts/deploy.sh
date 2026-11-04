@@ -3,10 +3,8 @@
 #
 #   scripts/deploy.sh
 #
-# The card ships inside the app folder (apps/fp2_companion/card/), and the app
-# installs it into Home Assistant's www folder and points the dashboard
-# resource at it when it starts (card_install.py), so there is no separate
-# card step.
+# The card is its own repository (sfortis/fp2-companion-card) and is
+# installed and updated through HACS, so this script deploys only the app.
 #
 # It assumes Home Assistant OS with the AppDaemon add-on and SSH access to the
 # host (for example the "Advanced SSH & Web Terminal" add-on with protection
@@ -19,7 +17,7 @@
 #
 # Only files tracked by git are deployed, every one is validated first, and a
 # file that does not parse refuses the whole deploy. AppDaemon reloads the app
-# by itself, and the app then updates the card and its resource's ?v=.
+# by itself when a .py or .yaml file changes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,17 +32,6 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "ERROR: $ROOT is not a git work tree, so there is no file list to deploy." >&2
   exit 1
 fi
-
-check_js() {
-  node --check "$1" || return 1
-  # A back quote inside the CSS template literal ends the stylesheet early.
-  local css
-  css="$(awk '/^const STYLE = `/{on=1; next} on && /^`;/{exit} on' "$1")"
-  if printf '%s' "$css" | grep -q '`'; then
-    echo "  a back quote inside the STYLE block of $1" >&2
-    return 1
-  fi
-}
 
 deploy_app() {
   # Home Assistant renamed the add-on containers from addon_ to app_ in
@@ -70,8 +57,6 @@ deploy_app() {
       *.py)
         python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
-      *.js)
-        check_js "$f" || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
       *.yaml)
         python3 -c "
 import sys, yaml
