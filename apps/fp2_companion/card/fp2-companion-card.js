@@ -216,8 +216,8 @@ const DEFAULTS = {
 };
 
 /* The card's words in other languages, by the first part of the language
- * code. Each holds every key of DEFAULTS.text (the smoke test checks it), so
- * a language is either whole or missing. */
+ * code. A language may lack a key, and that word then shows in English; it
+ * may not hold a key DEFAULTS.text lacks (the smoke test checks it). */
 const TRANSLATIONS = {
   it: {
     no_hub: "{entity} non c'è. L'app fp2_companion è in esecuzione?",
