@@ -102,12 +102,12 @@ type: custom:fp2-companion-card
 
 Its options are in the card's README.
 
-**Updating from version 1.3 or earlier.** Those versions copied the card
+**Updating from version 1.3.1 or earlier.** Those versions copied the card
 into Home Assistant's `www/fp2-companion/` folder and added a dashboard
 resource for it themselves. The app no longer does either, so that copy
 stops receiving updates. Install the card from HACS, then delete the
 resource whose URL starts with `/local/fp2-companion/` and the folder
-`www/fp2-companion/`. The AppDaemon log reminds you while the folder is
+`www/fp2-companion/`. A resource you added for the card by hand goes too. The AppDaemon log reminds you while the folder is
 still there. The
 [card's README](https://github.com/sfortis/fp2-companion-card#moving-from-the-card-the-app-installed)
 has the steps.

@@ -53,7 +53,7 @@ STATE_DIR = "/share/appdaemon/fp2_companion"
 SESSION_FILE = f"{STATE_DIR}/session.json"
 BACKUP_ROOT = f"{STATE_DIR}/backups"
 RUNTIME_FILE = f"{STATE_DIR}/runtime.json"
-# Where versions up to 1.3 copied the card (decision 22). Only looked at.
+# Where versions up to 1.3.1 copied the card (decision 22). Only looked at.
 OLD_CARD_DIR = "/homeassistant/www/fp2-companion"
 
 # What a zone write did, carried to its readback. Zones are matched by
@@ -884,7 +884,7 @@ class Fp2Companion(hass.Hass):
                           self._app_key, did, identities=self._identities)
 
     def _check_old_card(self, kwargs=None):
-        """Up to version 1.3 the app copied the card into Home Assistant's www
+        """Up to version 1.3.1 the app copied the card into Home Assistant's www
         folder and added a dashboard resource for it (decision 22). The card
         is its own HACS repository since then (decision 25), so that copy no
         longer updates. The app says how to remove it and deletes nothing."""

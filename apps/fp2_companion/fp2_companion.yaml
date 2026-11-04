@@ -38,7 +38,7 @@ fp2_companion:
   backups_keep: 50
 
   # The card is its own HACS repository, sfortis/fp2-companion-card. Versions
-  # up to 1.3 copied it into this folder, and the app warns at startup while
+  # up to 1.3.1 copied it into this folder, and the app warns at startup while
   # that old copy is still there. Set card_dir only if you had moved it.
   # card_dir: /homeassistant/www/fp2-companion
 

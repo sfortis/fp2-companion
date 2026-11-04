@@ -95,18 +95,18 @@ not depend on the cloud.
     through AppDaemon's MQTT plugin, and the card listens through Home
     Assistant's `mqtt/subscribe`. Nothing reaches the recorder, but the
     live view needs an admin user.
-22. Superseded by decision 25 on 2026-11-04. Up to version 1.3 the card
+22. Superseded by decision 25 on 2026-11-04. Up to version 1.3.1 the card
     shipped inside the app folder, because HACS downloads an
     AppDaemon repository's app folder and nothing else, and a second
     repository would let the card and the app drift apart. At startup the
-    app copies the card into Home Assistant's `www/fp2-companion/` and
-    points one dashboard resource at it, with the card's version and a
-    digest of the file in `?v=`, so a browser loads every new card. It
-    changes the resource over Home Assistant's websocket API through the
+    app copied the card into Home Assistant's `www/fp2-companion/` and
+    pointed one dashboard resource at it, with the card's version and a
+    digest of the file in `?v=`, so a browser loaded every new card. It
+    changed the resource over Home Assistant's websocket API through the
     Supervisor with the add-on's `SUPERVISOR_TOKEN`, a documented add-on
     interface, rather than through AppDaemon's internal websocket. A
-    resource for the card that a person added by hand is updated, never
-    doubled, and further ones are reported, never deleted.
+    resource for the card that a person added by hand was updated, never
+    doubled, and further ones were reported, never deleted.
 23. The app makes sure the card's commands reach it. It cannot read the
     MQTT plugin's `client_topics`, and subscribing regardless doubles every
     command for a list that already covers it: Mosquitto 2.1.2 delivers a
@@ -133,7 +133,7 @@ not depend on the cloud.
     downloads the card, updates it and registers its resource. The app
     writes nothing outside its own state folder and no longer uses the
     Supervisor token. At startup it only looks for the copy that versions
-    up to 1.3 left in `www/fp2-companion/`, and when it finds one it logs
+    up to 1.3.1 left in `www/fp2-companion/`, and when it finds one it logs
     how to remove it and the resource. It deletes nothing, because the
     folder and the resource may hold a person's own changes. The card
     defines its element only once, so the old copy and the new one can
