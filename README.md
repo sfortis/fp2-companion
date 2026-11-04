@@ -93,9 +93,10 @@ suit most homes.
 
 The card is its own HACS repository,
 [FP2 Companion Card](https://github.com/sfortis/fp2-companion-card). In HACS,
-add `https://github.com/sfortis/fp2-companion-card` as a custom repository of
-the type **Dashboard** and download it. HACS adds its dashboard resource and
-updates it. Then add the card to a dashboard:
+search for **FP2 Companion Card** and download it. If the search does not
+find it yet, add `https://github.com/sfortis/fp2-companion-card` as a custom
+repository of the type **Dashboard** instead. HACS adds its dashboard
+resource and updates it. Then add the card to a dashboard:
 
 ```yaml
 type: custom:fp2-companion-card
