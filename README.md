@@ -1,7 +1,7 @@
 # FP2 Companion for Home Assistant
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-companion-41BDF5?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
-[![HACS](https://img.shields.io/badge/HACS-custom-orange)](https://hacs.xyz/)
+[![HACS](https://img.shields.io/badge/HACS-default-41BDF5)](https://hacs.xyz/)
 [![AppDaemon](https://img.shields.io/badge/AppDaemon-4.5%2B-blue)](https://appdaemon.readthedocs.io/)
 
 A Home Assistant companion for the Aqara FP2 presence sensor. It brings the
@@ -64,9 +64,10 @@ and does not depend on the cloud.
 ### 1. The app
 
 **With HACS.** In HACS, open the integration's options and turn on
-**Enable AppDaemon apps discovery & tracking**. Then add
-`https://github.com/sfortis/fp2-companion` as a custom repository of the
-type **AppDaemon** and download FP2 Companion. HACS puts the app under
+**Enable AppDaemon apps discovery & tracking**. Then search for
+**FP2 Companion** in HACS and download it. If the search does not find it
+yet, add `https://github.com/sfortis/fp2-companion` as a custom repository
+of the type **AppDaemon** instead. HACS puts the app under
 `appdaemon/apps/` in Home Assistant's configuration folder, while the
 AppDaemon add-on on Home Assistant OS reads its apps from its own folder by
 default. Once the download has created that folder, point the add-on at it
