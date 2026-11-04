@@ -18,9 +18,25 @@ those settings available in Home Assistant through
 the same cloud API the Aqara app uses. Presence keeps flowing over HomeKit
 and does not depend on the cloud.
 
+## Requirements
+
+- Home Assistant with the FP2 paired through **HomeKit Device** (the
+  `homekit_controller` integration). The app finds FP2s by their HomeKit
+  model, `PS-S02D`, `PS-S02E` or `PS-T02E`.
+- An MQTT broker, such as the Mosquitto add-on, with Home Assistant's
+  **MQTT** integration connected to it.
+- The **AppDaemon** add-on (4.5 or later), with its MQTT plugin connected to
+  the same broker.
+- The [FP2 Companion Card](https://github.com/sfortis/fp2-companion-card),
+  installed from HACS. The card is the app's user interface.
+- An **Aqara account** that owns the FP2s.
+- An **admin** Home Assistant user for the live view, because it listens
+  through Home Assistant's own MQTT subscription, which is open to admins
+  only. Everything else works for any user.
+
 <p align="center">
-  <img src="docs/images/zones.png" width="380" alt="The Zones tab: the zone map with live targets and the zone list">
-  <img src="docs/images/settings.png" width="380" alt="The Settings tab: AI person detection, AI learning, sensitivity and approach distance">
+  <img src="https://raw.githubusercontent.com/sfortis/fp2-companion/main/docs/images/zones.png" width="380" alt="The Zones tab: the zone map with live targets and the zone list">
+  <img src="https://raw.githubusercontent.com/sfortis/fp2-companion/main/docs/images/settings.png" width="380" alt="The Settings tab: AI person detection, AI learning, sensitivity and approach distance">
 </p>
 
 > **Unofficial.** This project is not affiliated with Aqara or Lumi. It uses
@@ -46,18 +62,6 @@ and does not depend on the cloud.
   Aqara app. The password is encrypted in the browser and never stored.
 - **No polling:** the app reads the cloud at startup, after every write and
   on Refresh. The live view runs only while someone is looking at it.
-
-## Requirements
-
-- Home Assistant with the FP2 paired through **HomeKit Device** (the
-  `homekit_controller` integration). The app finds FP2s by their HomeKit
-  model, `PS-S02D`, `PS-S02E` or `PS-T02E`.
-- The **AppDaemon** add-on (4.5 or later), with its MQTT plugin connected to
-  the same broker as Home Assistant's MQTT integration.
-- An **Aqara account** that owns the FP2s.
-- An **admin** Home Assistant user for the live view, because it listens
-  through Home Assistant's own MQTT subscription, which is open to admins
-  only. Everything else works for any user.
 
 ## Installation
 
