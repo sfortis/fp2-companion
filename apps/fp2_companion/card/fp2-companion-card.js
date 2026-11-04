@@ -86,7 +86,13 @@ const DEFAULTS = {
    * follow from the device prefix. */
   entities: {},
 
-  /* Every word on screen comes from here. */
+  /* The language of the card's words, as a code like `it`. Empty follows the
+   * Home Assistant user's language, and a language the card does not ship
+   * falls back to English. */
+  language: null,
+
+  /* Every word on screen comes from here, in English. TRANSLATIONS holds the
+   * other languages, and words set here in the card config win over both. */
   text: {
     no_hub: 'No {entity}. Is the fp2_companion app running?',
     no_devices: 'The fp2_companion app has found no FP2 yet. An FP2 that is not '
@@ -198,8 +204,163 @@ const DEFAULTS = {
       refused: 'Refused',
       not_on_account: 'Not on this account',
     },
+    /* The options of the sensitivity and approach distance selects, which
+     * the app publishes in English; what is sent back is always the option
+     * itself. */
+    option: {
+      Low: 'Low', Medium: 'Medium', High: 'High',
+      Far: 'Far', Middle: 'Middle', Close: 'Close',
+    },
+    ago: { now: 'just now', min: '{n} min ago', h: '{n} h ago', d: '{n} d ago' },
   },
 };
+
+/* The card's words in other languages, by the first part of the language
+ * code. Each holds every key of DEFAULTS.text (the smoke test checks it), so
+ * a language is either whole or missing. */
+const TRANSLATIONS = {
+  it: {
+    no_hub: "{entity} non c'è. L'app fp2_companion è in esecuzione?",
+    no_devices: "L'app fp2_companion non ha ancora trovato nessun FP2. Un FP2 non "
+      + 'associato via HomeKit va indicato col suo seriale sotto devices: in fp2_companion.yaml.',
+    no_status: "{entity} non c'è. L'app gestisce questo FP2, quindi le sue entità potrebbero "
+      + 'avere altri id: indicale sotto entities: in una card fissata con device:.',
+    device_missing: "L'FP2 {device} non è tra i dispositivi gestiti dall'app.",
+    country: 'Paese',
+    sensitivity: 'Sensibilità',
+    sensitivity_hint: 'Quanto facilmente viene rilevata una persona.',
+    sensitivity_by_ai: 'Decisa dal rilevamento persone AI finché è attivo.',
+    ai: 'Rilevamento persone AI',
+    ai_hint: 'Il sensore decide da solo che cosa è una persona.',
+    learning: 'Apprendimento AI',
+    learning_hint: "Impara com'è fatta la stanza. Dura circa un minuto.",
+    learning_start: 'Avvia',
+    learning_left: 'Apprendimento {s} s',
+    approach: 'Distanza di avvicinamento',
+    approach_hint: 'Quanto deve avvicinarsi qualcuno prima di essere contato.',
+    zones: 'Zone',
+    tabs: { zones: 'Zone', settings: 'Impostazioni', backups: 'Backup', account: 'Account' },
+    section_account: 'Account Aqara',
+    section_ai: 'AI',
+    section_detection: 'Rilevamento',
+    live: {
+      starting: 'Connessione alla vista dal vivo',
+      nobody: 'Dal vivo · nessuno in vista',
+      one: 'Dal vivo · 1 persona',
+      many: 'Dal vivo · {n} persone',
+      interference: '{n} interferenze',
+      retrying: 'Riconnessione alla vista dal vivo',
+      stopped: 'Vista dal vivo ferma',
+      no_session: "La vista dal vivo richiede l'accesso",
+      refused: 'Nessuna vista dal vivo su questo account',
+      not_admin: 'La vista dal vivo richiede un utente amministratore',
+    },
+    interference: 'Interferenza',
+    detection: 'Rilevamento',
+    edge: 'Bordo',
+    entrance: 'Ingresso',
+    type: 'Tipo',
+    type_other: 'Altro',
+    overlap: 'Blocchi in più di una zona: {n}',
+    no_zones: 'Nessuna zona letta finora.',
+    legend_hint: 'Premi una zona per evidenziarla sulla mappa, o Modifica per cambiarla.',
+    edit: 'Modifica',
+    new_zone: 'Nuova zona',
+    new_zone_name: 'Zona di rilevamento {n}',
+    edit_hint: 'Tocca o trascina sulla mappa per aggiungere o togliere blocchi.',
+    edge_hint: 'Tocca o trascina sulla mappa per aggiungere o togliere blocchi del bordo.',
+    edge_open: '{n} blocchi fuori dal bordo contano ancora come stanza. '
+      + 'Modifica il bordo e premi Riempi fuori.',
+    edge_open_draft: '{n} blocchi sono esclusi dalla stanza ma contano ancora come stanza.',
+    fill_outside: 'Riempi fuori',
+    entrance_hint: 'Tocca o trascina sulla mappa per aggiungere o togliere blocchi. '
+      + "I blocchi della zona di interferenza restano fuori da una zona d'ingresso.",
+    attribute: 'Attributo',
+    attr_detection: 'Zona di rilevamento',
+    attr_entrance: 'Ingressi e uscite',
+    attr_edge: 'Bordo',
+    attr_taken: '{attr} (usato da {zone})',
+    attr_change_hint: 'Salvando, questa zona diventa: {attr}. '
+      + 'Nome, tipo e sensibilità non vengono mantenuti.',
+    name: 'Nome',
+    save: 'Salva',
+    cancel: 'Annulla',
+    delete: 'Elimina',
+    confirm: 'Premi di nuovo',
+    sending: 'Inviato. La mappa si aggiorna quando il dispositivo conferma.',
+    backups: 'Backup',
+    no_backups: 'Ancora nessun backup.',
+    backup_choose: 'Scegli un backup per vederlo sulla mappa',
+    preview_of: 'Backup del {when}',
+    loading_preview: 'Caricamento del backup...',
+    restore: 'Ripristina',
+    close: 'Chiudi',
+    reason: {
+      'first-read': 'Prima lettura',
+      changed: 'Zone cambiate',
+      'before-write': 'Prima di una modifica',
+      'before-restore': 'Prima di un ripristino',
+    },
+    refresh: 'Aggiorna',
+    last_read: 'Letto {ago}',
+    never_read: 'Non ancora letto',
+    token: 'Sessione valida fino al {date}',
+    sign_in_title: 'Accedi ad Aqara',
+    sign_in_hint: 'La password viene cifrata su questo dispositivo prima di essere '
+      + 'inviata, e si conserva solo la sessione.',
+    email: 'Email',
+    password: 'Password',
+    sign_in: 'Accedi',
+    choose_country: 'Scegli il tuo paese',
+    signing_in: 'Accesso in corso...',
+    signed_in_as: 'Accesso come {account}',
+    signed_in: 'Accesso effettuato',
+    change_login: 'Cambia account',
+    log_out: 'Esci',
+    status: {
+      starting: 'Avvio',
+      ok: 'Cloud OK',
+      device_unresolved: 'Dispositivo non trovato',
+      no_session: 'Accesso non effettuato',
+      cloud_error: 'Errore del cloud',
+      write_not_applied: 'Scrittura ignorata',
+      zone_write_failed: 'Modifica della zona non riuscita',
+      login_failed: 'Accesso non riuscito',
+      refused: 'Rifiutato',
+      not_on_account: 'Non su questo account',
+    },
+    option: {
+      Low: 'Bassa', Medium: 'Media', High: 'Alta',
+      Far: 'Lontana', Middle: 'Media', Close: 'Vicina',
+    },
+    ago: { now: 'adesso', min: '{n} min fa', h: '{n} h fa', d: '{n} g fa' },
+  },
+};
+
+/* The language to show: the card's `language`, else the Home Assistant
+ * user's, as its first part in lower case (`it-IT` is `it`). */
+function cardLanguage(configured, hass) {
+  const raw = configured || (hass && ((hass.locale && hass.locale.language) || hass.language))
+    || 'en';
+  return String(raw).split('-')[0].toLowerCase();
+}
+
+/* The words for a language: English, then that language over it, then the
+ * card config's own words over both. */
+function cardText(userText, language) {
+  return deepDefaults(userText, deepDefaults(TRANSLATIONS[language], DEFAULTS.text));
+}
+
+/* A country's name in the card's language, where the browser knows it, else
+ * the English name the app sends. */
+function countryName(code, name, language) {
+  if (language === 'en' || typeof Intl === 'undefined' || !Intl.DisplayNames) return name;
+  try {
+    return new Intl.DisplayNames([language], { type: 'region' }).of(code) || name;
+  } catch (e) {
+    return name;
+  }
+}
 
 /* The status codes that need someone to act, against the ones that only
  * report. Kept beside the text so a new code gets both or neither. */
@@ -568,13 +729,13 @@ function parseStamp(text) {
   return Number.isFinite(t) ? t : null;
 }
 
-function ago(ms, now) {
+function ago(ms, now, text) {
   if (ms === null) return null;
   const s = Math.max(0, Math.round((now - ms) / 1000));
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} d ago`;
+  if (s < 60) return text.now;
+  if (s < 3600) return tpl(text.min, { n: Math.round(s / 60) });
+  if (s < 86400) return tpl(text.h, { n: Math.round(s / 3600) });
+  return tpl(text.d, { n: Math.round(s / 86400) });
 }
 
 function shortTime(epochSeconds) {
@@ -639,8 +800,9 @@ function zoneType(zone, text) {
 }
 
 /* Only a detection zone has a sensitivity worth showing. */
-function zoneSensitivity(zone) {
-  return zone.regionType === REGION_DETECTION ? (SENSITIVITY[zone.sensitivity] || '') : '';
+function zoneSensitivity(zone, text) {
+  const label = zone.regionType === REGION_DETECTION ? SENSITIVITY[zone.sensitivity] : null;
+  return label ? (text.option[label] || label) : '';
 }
 
 /* Block id to cell, both from 0. The same arithmetic as zone_model.cell(). */
@@ -897,7 +1059,10 @@ class Fp2CompanionCard extends HTMLElement {
   }
 
   setConfig(config) {
+    this._userConfig = config || {};
     this._config = deepDefaults(config, DEFAULTS);
+    /* The words follow the language, which is known only with hass. */
+    this._lang = null;
     this._refs = null;
     /* A new config can change the pin and the overrides, so the device and
      * its entity ids are worked out again on the next update. The stored
@@ -915,6 +1080,12 @@ class Fp2CompanionCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+    const lang = cardLanguage(this._userConfig.language, hass);
+    if (lang !== this._lang) {
+      this._lang = lang;
+      this._config.text = cardText(this._userConfig.text, lang);
+      this._refs = null;
+    }
     const cfg = this._config;
     const hub = hass && hass.states && hass.states[cfg.devices_entity];
     const devices = (hub && hub.attributes && hub.attributes.devices) || [];
@@ -1451,11 +1622,14 @@ class Fp2CompanionCard extends HTMLElement {
     none.value = '';
     none.disabled = true;
     country.appendChild(none);
-    countries.forEach(([code, name]) => {
-      const opt = el('option', '', name);
-      opt.value = code;
-      country.appendChild(opt);
-    });
+    /* In the card's language, and in its alphabetical order. */
+    countries.map(([code, name]) => [code, countryName(code, name, this._lang)])
+      .sort((a, b) => a[1].localeCompare(b[1], this._lang || undefined))
+      .forEach(([code, name]) => {
+        const opt = el('option', '', name);
+        opt.value = code;
+        country.appendChild(opt);
+      });
     country.value = chosen;
     countryLabel.appendChild(country);
     panel.appendChild(countryLabel);
@@ -1683,7 +1857,7 @@ class Fp2CompanionCard extends HTMLElement {
 
     const now = Date.now();
     const read = parseStamp(sa.last_read);
-    r.info.textContent = read === null ? t.never_read : tpl(t.last_read, { ago: ago(read, now) });
+    r.info.textContent = read === null ? t.never_read : tpl(t.last_read, { ago: ago(read, now, t.ago) });
     const exp = parseStamp(sa.token_expires);
     const d = exp === null ? null : new Date(exp);
     r.session.textContent = d ? tpl(t.token, { date: `${d.getDate()}/${d.getMonth() + 1}` }) : '';
@@ -1696,7 +1870,7 @@ class Fp2CompanionCard extends HTMLElement {
       ref.seg.innerHTML = '';
       ref.buttons = {};
       options.forEach((opt) => {
-        const b = el('button', '', opt);
+        const b = el('button', '', this._config.text.option[opt] || opt);
         b.addEventListener('click', () => this._select(key, opt));
         ref.seg.appendChild(b);
         ref.buttons[opt] = b;
@@ -1783,7 +1957,7 @@ class Fp2CompanionCard extends HTMLElement {
        * sensitivity; the block count meant nothing to anyone (owner,
        * 2026-10-30). */
       row.appendChild(el('div', 'meta type', zoneType(z, t)));
-      row.appendChild(el('div', 'meta sens', zoneSensitivity(z)));
+      row.appendChild(el('div', 'meta sens', zoneSensitivity(z, t)));
       /* Editing has its own button, so a press on the row only picks the zone
        * out on the map and can never start an edit by accident. While one
        * zone is being edited the other badges are hidden, because switching
@@ -2135,7 +2309,8 @@ class Fp2CompanionCard extends HTMLElement {
       const seg = el('div', 'seg');
       this._editSeg = {};
       Object.keys(SENSITIVITY).forEach((v) => {
-        const b = el('button', Number(v) === e.sensitivity ? 'on' : '', SENSITIVITY[v]);
+        const b = el('button', Number(v) === e.sensitivity ? 'on' : '',
+          t.option[SENSITIVITY[v]] || SENSITIVITY[v]);
         b.setAttribute('aria-pressed', String(Number(v) === e.sensitivity));
         b.addEventListener('click', () => {
           e.sensitivity = Number(v);
@@ -2411,7 +2586,7 @@ class Fp2CompanionCard extends HTMLElement {
       row.appendChild(sw);
       row.appendChild(el('div', 'nm', z.name));
       row.appendChild(el('div', 'meta type', zoneType(z, t)));
-      row.appendChild(el('div', 'meta sens', zoneSensitivity(z)));
+      row.appendChild(el('div', 'meta sens', zoneSensitivity(z, t)));
       row.appendChild(el('div', ''));
       r.legend.appendChild(row);
     });
