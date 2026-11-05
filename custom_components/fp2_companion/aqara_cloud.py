@@ -36,7 +36,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from regions import identity_for, region_for
+from .regions import identity_for, region_for
 
 BASE_URL = "https://rpc-ger.aqara.com/app/v1.0/lumi/"
 DEFAULT_TIMEOUT = 20

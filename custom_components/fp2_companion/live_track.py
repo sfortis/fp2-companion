@@ -29,7 +29,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from aqara_cloud import (RID_POSITIONS, VIEW_HEARTBEAT_SECONDS, AqaraAuthError,
+from .aqara_cloud import (RID_POSITIONS, VIEW_HEARTBEAT_SECONDS, AqaraAuthError,
                          AqaraError)
 
 # A lease outlives one missed renewal from a card that renews every 30 s.

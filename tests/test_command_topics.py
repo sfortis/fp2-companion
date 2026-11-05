@@ -1,7 +1,7 @@
 """The app makes sure the card's commands reach it, without doubling them."""
 from conftest import World, _load
 
-ct = _load("command_topics", "fp2_companion/command_topics.py")
+ct = _load("command_topics")
 
 CMD = "fp2companion/cmd/#"
 DEV = "fp2companion/+/cmd/#"

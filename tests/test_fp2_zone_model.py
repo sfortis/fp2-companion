@@ -9,14 +9,10 @@ the card.
 """
 import json
 import os
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                       / "apps" / "fp2_companion"))
-from zone_model import (  # noqa: E402
+from custom_components.fp2_companion.zone_model import (
     BLOCK_COUNT, ERR_BAD_BLOCK, ERR_BAD_NAME, ERR_BAD_REGION,
     ERR_BAD_SENSITIVITY, ERR_DUPLICATE_BLOCK, ERR_MISSING_FIELD,
     ERR_BAD_TAG, ERR_EDGE_LOCKED, ERR_NO_BLOCKS, ERR_RANGE_ID,
@@ -397,7 +393,7 @@ def test_a_backup_keeps_the_edges_sensitivity_and_tag(tmp_path):
 
 
 # ---------------------------------------------------------------- attributes
-import zone_model as zm  # noqa: E402
+from custom_components.fp2_companion import zone_model as zm
 
 
 def z(rid, name, region, blocks, sens=1):

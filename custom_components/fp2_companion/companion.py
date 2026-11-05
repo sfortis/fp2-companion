@@ -30,14 +30,14 @@ import unicodedata
 
 import hassapi as hass
 
-from aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
+from .aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          RID_SENSITIVITY, AqaraAuthError, AqaraCloud,
                          AqaraError, AqaraRefused, SessionStore,
                          did_from_serial, jwt_exp)
-from command_topics import CommandTopics
-from live_track import LiveTracker, to_grid
-from regions import COUNTRIES
-from zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
+from .command_topics import CommandTopics
+from .live_track import LiveTracker, to_grid
+from .regions import COUNTRIES
+from .zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
                         ERR_ENTRANCE_LOCKED, ERR_NO_BLOCKS, ERR_RANGE_ID,
                         LOCKED_REGIONS, REGION_DETECTION, REGION_EDGE,
                         REGION_ENTRANCE, REGION_INTERFERENCE, ROWS,

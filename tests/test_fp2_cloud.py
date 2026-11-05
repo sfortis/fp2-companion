@@ -9,17 +9,13 @@ import hashlib
 import json
 import os
 import stat
-import sys
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                       / "apps" / "fp2_companion"))
-import aqara_cloud  # noqa: E402
-import regions  # noqa: E402
-from aqara_cloud import (  # noqa: E402
+from custom_components.fp2_companion import aqara_cloud
+from custom_components.fp2_companion import regions
+from custom_components.fp2_companion.aqara_cloud import (
     CODE_TOKEN_EXPIRED, REFRESH_MARGIN_SECONDS, AqaraAuthError,
     AqaraCloud, AqaraError, AqaraRefused, SessionStore, did_from_serial,
     jwt_exp)

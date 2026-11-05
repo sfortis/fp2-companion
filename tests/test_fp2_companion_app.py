@@ -11,7 +11,9 @@ import pytest
 
 from conftest import World, _bind, _load, mqtt_payload
 
-from aqara_cloud import AqaraAuthError, AqaraError, AqaraRefused
+from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
+                                                         AqaraError,
+                                                         AqaraRefused)
 
 DID = "lumi1.54ef44a1b2c3"
 KEY = "54ef44a1b2c3"
@@ -167,7 +169,7 @@ class FakeCloud:
 
 @pytest.fixture
 def fp2(tmp_path):
-    mod = _load("fp2_companion", "fp2_companion/fp2_companion.py")
+    mod = _load("companion")
     mod.SESSION_FILE = str(tmp_path / "session.json")
     mod.BACKUP_ROOT = str(tmp_path / "backups")
     mod.RUNTIME_FILE = str(tmp_path / "runtime.json")

@@ -5,19 +5,16 @@ loop, so nothing here opens a connection or a thread.
 """
 import asyncio
 import json
-import sys
 import threading
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent
-                       / "apps" / "fp2_companion"))
-import live_track  # noqa: E402
-from aqara_cloud import AqaraAuthError, AqaraError  # noqa: E402
-from live_track import (LIVE_NO_SESSION, LIVE_ON, LIVE_REFUSED,  # noqa: E402
-                        LIVE_RETRYING, LIVE_STOPPED, LIVE_WATCHING, LiveTracker,
-                        live_targets, positions_from, to_grid)
+from custom_components.fp2_companion import live_track
+from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
+                                                         AqaraError)
+from custom_components.fp2_companion.live_track import (
+    LIVE_NO_SESSION, LIVE_ON, LIVE_REFUSED, LIVE_RETRYING, LIVE_STOPPED,
+    LIVE_WATCHING, LiveTracker, live_targets, positions_from, to_grid)
 
 DID = "lumi1.54ef44a1b2c3"
 OTHER = "lumi1.54ef44d4e5f6"

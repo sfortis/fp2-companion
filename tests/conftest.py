@@ -23,17 +23,26 @@ class _Hass:
 _hass_mod.Hass = _Hass
 sys.modules["hassapi"] = _hass_mod
 
-APPS = Path(__file__).resolve().parent.parent / "apps"
-APP_DIR = APPS / "fp2_companion"
-# AppDaemon puts the app folder on sys.path, so the app imports its sibling
-# modules by name. The same is done here.
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
+PACKAGE = "custom_components.fp2_companion"
+PACKAGE_DIR = (Path(__file__).resolve().parent.parent
+               / "custom_components" / "fp2_companion")
+
+# The package's __init__.py needs Home Assistant, which these tests do without.
+# The modules import each other relatively, so two bare packages that only
+# carry the folder in __path__ are enough to import them.
+for _name, _path in (("custom_components", PACKAGE_DIR.parent),
+                     (PACKAGE, PACKAGE_DIR)):
+    if _name not in sys.modules:
+        _pkg = types.ModuleType(_name)
+        _pkg.__path__ = [str(_path)]
+        sys.modules[_name] = _pkg
 
 
-def _load(module_name, rel_path):
-    path = APPS / rel_path
-    spec = importlib.util.spec_from_file_location(module_name, path)
+def _load(module_name):
+    """A fresh copy of one module of the package, so that a test may replace
+    its constants without reaching the next test."""
+    spec = importlib.util.spec_from_file_location(
+        f"{PACKAGE}.{module_name}", PACKAGE_DIR / f"{module_name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
