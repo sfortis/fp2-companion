@@ -8,6 +8,8 @@ CONF_EXCLUDE = "exclude"
 CONF_BACKUPS_KEEP = "backups_keep"
 CONF_TOKEN_CHECK_TIME = "token_check_time"
 CONF_APP_IDENTITIES = "app_identities"
+# Only in the options form: empties the stored pairs, and is not stored.
+CONF_CLEAR_APP_IDENTITIES = "clear_app_identities"
 
 DEFAULT_BACKUPS_KEEP = 50
 DEFAULT_TOKEN_CHECK_TIME = "04:10:00"

@@ -20,6 +20,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -33,6 +34,7 @@ from .aqara_cloud import did_from_serial
 from .const import (
     CONF_APP_IDENTITIES,
     CONF_BACKUPS_KEEP,
+    CONF_CLEAR_APP_IDENTITIES,
     CONF_DEVICES,
     CONF_EXCLUDE,
     CONF_TOKEN_CHECK_TIME,
@@ -58,6 +60,7 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_APP_IDENTITIES, default=[]): TextSelector(
             TextSelectorConfig(type=TextSelectorType.PASSWORD, multiple=True)
         ),
+        vol.Optional(CONF_CLEAR_APP_IDENTITIES, default=False): BooleanSelector(),
     }
 )
 
@@ -101,11 +104,26 @@ class Fp2CompanionOptionsFlow(OptionsFlow):
             ):
                 errors[CONF_APP_IDENTITIES] = "invalid_identity"
             if not errors:
-                return self.async_create_entry(data=user_input)
+                data = dict(user_input)
+                clear = data.pop(CONF_CLEAR_APP_IDENTITIES, False)
+                # The pairs are never sent to the browser, so the field
+                # starts empty: an empty submit keeps the stored pairs.
+                if clear:
+                    data[CONF_APP_IDENTITIES] = []
+                elif not data.get(CONF_APP_IDENTITIES):
+                    data[CONF_APP_IDENTITIES] = list(
+                        self.config_entry.options.get(CONF_APP_IDENTITIES, [])
+                    )
+                return self.async_create_entry(data=data)
+        suggested = {
+            key: value
+            for key, value in (user_input or self.config_entry.options).items()
+            if key != CONF_APP_IDENTITIES
+        }
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                OPTIONS_SCHEMA, user_input or self.config_entry.options
+                OPTIONS_SCHEMA, suggested
             ),
             errors=errors,
         )

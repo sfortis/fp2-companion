@@ -902,7 +902,7 @@ class Fp2Companion:
         """The runtime calls this when the integration unloads or reloads.
         Without it the live socket's thread and loop would survive every
         reload, still subscribed."""
-        tracker, self.tracker = self.tracker, None
+        tracker, self.tracker = getattr(self, "tracker", None), None
         if tracker is not None:
             tracker.shutdown()
 

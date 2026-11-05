@@ -292,3 +292,40 @@ async def test_home_assistant_stopping_stops_the_app(hass, mqtt, entry) -> None:
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
     await hass.async_block_till_done()
     assert worker._shutdown
+
+
+async def test_stored_identities_are_not_sent_and_kept_when_empty(
+        hass, mqtt, fp2_device) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, options={"app_identities": ["id:key"]})
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = result["data_schema"].schema
+    field = next(k for k in schema if k == "app_identities")
+    assert "id:key" not in str(field.description)
+    # An empty submit keeps the stored pairs.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"backups_keep": 5})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["app_identities"] == ["id:key"]
+    assert "clear_app_identities" not in entry.options
+    await hass.async_block_till_done()
+    # New pairs replace them, and the clear box empties them.
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"app_identities": ["a:b"]})
+    assert entry.options["app_identities"] == ["a:b"]
+    await hass.async_block_till_done()
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"clear_app_identities": True})
+    assert entry.options["app_identities"] == []
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_terminate_before_initialize_does_not_fail() -> None:
+    from custom_components.fp2_companion.companion import Fp2Companion
+
+    Fp2Companion.terminate(object.__new__(Fp2Companion))

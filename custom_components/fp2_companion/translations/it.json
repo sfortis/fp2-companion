@@ -18,14 +18,16 @@
           "exclude": "FP2 da ignorare",
           "backups_keep": "Backup delle zone da conservare per ogni FP2",
           "token_check_time": "Controllo giornaliero del token",
-          "app_identities": "Identità aggiuntive dell'app Aqara"
+          "app_identities": "Identità aggiuntive dell'app Aqara",
+          "clear_app_identities": "Rimuovi le identità app salvate"
         },
         "data_description": {
           "devices": "Il numero di serie di ogni FP2, come 54EF44A1B2C3.",
           "exclude": "Il numero di serie di ogni FP2 che l'integrazione non deve gestire.",
           "backups_keep": "Un backup viene scritto ogni volta che le zone cambiano e prima di ogni scrittura di zone.",
           "token_check_time": "A quest'ora il token viene rinnovato se mancano meno di tre giorni alla scadenza.",
-          "app_identities": "Facoltative, nella forma app_id:app_key. Vengono provate dopo l'identità integrata della regione."
+          "app_identities": "Facoltativo, nella forma app_id:app_key. Provate dopo l'identità integrata della regione. Le coppie salvate non vengono mai mostrate: lascia vuoto per tenerle, oppure inserisci le nuove per sostituirle.",
+          "clear_app_identities": "Spunta per cancellare tutte le coppie salvate."
         }
       }
     },

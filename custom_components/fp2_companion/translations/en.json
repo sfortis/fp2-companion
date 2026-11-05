@@ -18,14 +18,16 @@
           "exclude": "FP2s to leave alone",
           "backups_keep": "Zone backups to keep per FP2",
           "token_check_time": "Daily token check",
-          "app_identities": "Extra Aqara app identities"
+          "app_identities": "Extra Aqara app identities",
+          "clear_app_identities": "Remove the stored app identities"
         },
         "data_description": {
           "devices": "The serial of each FP2, as 54EF44A1B2C3.",
           "exclude": "The serial of each FP2 this integration should not serve.",
           "backups_keep": "A backup is written whenever the zones change and before every zone write.",
           "token_check_time": "The token is refreshed at this time when fewer than three days remain.",
-          "app_identities": "Optional, as app_id:app_key. Tried after the built-in identity of the region."
+          "app_identities": "Optional, as app_id:app_key. Tried after the built-in identity of the region. The stored pairs are never shown: leave this empty to keep them, or enter new ones to replace them.",
+          "clear_app_identities": "Tick to delete every stored pair."
         }
       }
     },

@@ -67,11 +67,15 @@ deploy_integration() {
   # are deleted on the host too, because the folder is replaced as a whole.
   printf '%s\0' "${files[@]}" | tar czf "$tarball" --null -T -
   scp -q "$tarball" "$SSH_HOST:$remote"
-  # Extract next to the integration and swap, so a failed tar leaves the
-  # installed integration as it was.
+  # Extract next to the integration and swap. The old folder is kept as
+  # .old until the new one is in place, and the trap puts it back if the swap
+  # fails, so the installed integration is never left missing.
   ssh "$SSH_HOST" "set -e; staging=\$(mktemp -d '$CONFIG_DIR/.fp2_companion_deploy.XXXXXX'); \
-    trap 'rm -rf \"\$staging\"; rm -f $remote' EXIT; \
+    trap 'rm -rf \"\$staging\"; rm -f $remote; \
+      if [ ! -d \"$CONFIG_DIR/$PACKAGE\" ] && [ -d \"$CONFIG_DIR/$PACKAGE.old\" ]; then \
+        mv \"$CONFIG_DIR/$PACKAGE.old\" \"$CONFIG_DIR/$PACKAGE\"; fi' EXIT; \
     tar xzf $remote -C \"\$staging\"; \
+    mkdir -p '$CONFIG_DIR/custom_components'; \
     rm -rf '$CONFIG_DIR/$PACKAGE.old'; \
     if [ -d '$CONFIG_DIR/$PACKAGE' ]; then mv '$CONFIG_DIR/$PACKAGE' '$CONFIG_DIR/$PACKAGE.old'; fi; \
     mv \"\$staging/$PACKAGE\" '$CONFIG_DIR/$PACKAGE'; \
