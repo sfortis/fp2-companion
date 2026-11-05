@@ -37,7 +37,7 @@
   "issues": {
     "appdaemon_app_installed": {
       "title": "The AppDaemon app of FP2 Companion is still installed",
-      "description": "FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration refresh the same Aqara session and sign each other out, and both publish the same entities.\n\nDelete that folder and the `fp2_companion` entry of your AppDaemon `apps.yaml`, then restart AppDaemon. This warning goes away the next time the integration starts."
+      "description": "FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration would both act on every card command and refresh the same Aqara session, signing each other out. So the integration waits.\n\nDelete that folder and the `fp2_companion` entry of your AppDaemon `apps.yaml`, then restart AppDaemon. The integration then starts by itself, keeps your Aqara session and your zone backups, and this repair goes away."
     }
   }
 }

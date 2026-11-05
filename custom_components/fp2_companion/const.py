@@ -25,6 +25,7 @@ STATE_DIR = ".storage/fp2_companion"
 APPDAEMON_STATE_DIR = "/share/appdaemon/fp2_companion"
 
 # Where HACS put the AppDaemon app, under the config folder. While it is
-# there, the app and the integration may both run on one session.
+# there, the integration does not start: the app may be running on the same
+# session and the same topics.
 APPDAEMON_APP_DIR = "appdaemon/apps/fp2_companion"
 ISSUE_APPDAEMON_APP = "appdaemon_app_installed"

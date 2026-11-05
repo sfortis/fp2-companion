@@ -15,7 +15,7 @@ from typing import Any
 
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
 
@@ -47,12 +47,27 @@ async def async_setup_entry(
     """Start the app."""
     if not await mqtt.async_wait_for_mqtt_client(hass):
         raise ConfigEntryNotReady("MQTT is not available")
-    state_dir = hass.config.path(STATE_DIR)
+    # While the AppDaemon app is installed it may be running: both would act
+    # on every card command and refresh one session, signing each other out.
+    # So the integration waits, and Home Assistant retries the setup until
+    # the folder is gone. Only then is the app's session the newest one.
     old_app = hass.config.path(APPDAEMON_APP_DIR)
-    app_still_there = await hass.async_add_executor_job(
-        _prepare_state, state_dir, old_app
-    )
-    _async_report_old_app(hass, app_still_there, old_app)
+    if await hass.async_add_executor_job(os.path.isdir, old_app):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_APPDAEMON_APP,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=ISSUE_APPDAEMON_APP,
+            translation_placeholders={"path": old_app},
+        )
+        raise ConfigEntryNotReady(
+            f"The AppDaemon app of FP2 Companion is still in {old_app}"
+        )
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
+    state_dir = hass.config.path(STATE_DIR)
+    await hass.async_add_executor_job(_prepare_state, state_dir)
 
     app = HassFp2Companion(hass, _app_args(hass, entry, state_dir))
     await app.async_start()
@@ -75,10 +90,10 @@ async def _async_options_updated(
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-def _prepare_state(state_dir: str, old_app: str) -> bool:
+def _prepare_state(state_dir: str) -> None:
     """Create the state folder. On the first setup after the AppDaemon app,
     copy its session and backups, so nobody signs in again; the originals
-    stay. Returns whether the AppDaemon app is still installed."""
+    stay."""
     first = not os.path.exists(os.path.join(state_dir, "session.json"))
     os.makedirs(state_dir, mode=0o700, exist_ok=True)
     if first and os.path.isfile(os.path.join(APPDAEMON_STATE_DIR, "session.json")):
@@ -96,25 +111,6 @@ def _prepare_state(state_dir: str, old_app: str) -> bool:
             "from %s",
             APPDAEMON_STATE_DIR,
         )
-    return os.path.isdir(old_app)
-
-
-@callback
-def _async_report_old_app(hass: HomeAssistant, still_there: bool, path: str) -> None:
-    """A repair while the AppDaemon app is installed: if AppDaemon runs it,
-    the two refresh one session and revoke each other's token."""
-    if still_there:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            ISSUE_APPDAEMON_APP,
-            is_fixable=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_APPDAEMON_APP,
-            translation_placeholders={"path": path},
-        )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
 
 
 def _app_args(

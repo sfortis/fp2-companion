@@ -169,15 +169,34 @@ async def test_the_appdaemon_state_is_copied_once(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_the_appdaemon_app_still_installed_is_a_repair(
-        hass, mqtt, fp2_device) -> None:
+async def test_it_waits_while_the_appdaemon_app_is_installed(
+        hass, mqtt, fp2_device, tmp_path, monkeypatch) -> None:
+    old = tmp_path / "appdaemon_state"
+    old.mkdir()
+    (old / "session.json").write_text(json.dumps({"phone_id": "kept"}))
+    monkeypatch.setattr(integration, "APPDAEMON_STATE_DIR", str(old))
     old_app = hass.config.path("appdaemon", "apps", "fp2_companion")
     await hass.async_add_executor_job(
         lambda: os.makedirs(old_app, exist_ok=True))
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
-    await start(hass, entry)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.SETUP_RETRY
     assert ir.async_get(hass).async_get_issue(DOMAIN, "appdaemon_app_installed")
+    # Nothing was copied and nothing was published while it waits.
+    state = hass.config.path(".storage", "fp2_companion", "session.json")
+    assert not await hass.async_add_executor_job(os.path.exists, state)
+    assert "fp2companion/hub/attrs" not in published(mqtt)
+
+    # Once the folder is gone, the next retry starts it and clears the repair.
+    await hass.async_add_executor_job(os.rmdir, old_app)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.state is ConfigEntryState.LOADED
+    await wait_for_worker(hass, entry)
+    assert not ir.async_get(hass).async_get_issue(
+        DOMAIN, "appdaemon_app_installed")
+    assert await hass.async_add_executor_job(os.path.exists, state)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

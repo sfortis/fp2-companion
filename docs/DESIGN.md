@@ -158,8 +158,9 @@ not depend on the cloud.
     `.storage/fp2_companion/`, where Home Assistant keeps its own
     credentials and which every backup includes, and the first setup copies
     the session and the backups over, so nobody signs in again. One session
-    still allows one instance, so the integration raises a repair while the
-    AppDaemon app's folder is installed. Native entities on the HomeKit
+    still allows one instance, and both would act on every card command, so
+    while the AppDaemon app's folder is installed the integration does not
+    start and raises a repair. Native entities on the HomeKit
     device, which decision 3 rules out for MQTT discovery, are now possible
     and left for later.
 

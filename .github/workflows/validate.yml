@@ -15,6 +15,9 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # Until the integration ships custom_components/fp2_companion/brand/
+          # icon.png or is listed in home-assistant/brands.
+          ignore: brands
 
   hassfest:
     name: Hassfest

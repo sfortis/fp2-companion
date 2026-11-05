@@ -95,8 +95,12 @@ session and sign each other out. So:
 3. Settings you had in `fp2_companion.yaml` (`devices`, `exclude`,
    `backups_keep`, `token_check_time`) go into the integration's options.
 
-While the app's folder is still there, the integration raises a repair that
-says so.
+While the app's folder is still there, the integration does not start and
+raises a repair that says so; it starts by itself once the folder is gone.
+It can see the folder only where HACS put it. If you copied the app by hand
+into the AppDaemon app's own folder
+(`/addon_configs/a0d7b954_appdaemon/apps/`), remove it from there yourself
+first.
 
 ### 2. The card
 
