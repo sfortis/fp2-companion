@@ -3,8 +3,8 @@
 The FP2 reports presence locally over HomeKit but has no local configuration
 channel, so its settings go through the private API the official Android app
 uses. The protocol is described in docs/PROTOCOL.md. This module is
-deliberately free of AppDaemon so every request shape can be tested without a
-network.
+deliberately free of Home Assistant so every request shape can be tested
+without a network.
 
 Four rules are built in here, and each one cost a failed round when it was
 broken:
@@ -181,8 +181,8 @@ def jwt_exp(token):
 def encrypt_password(password):
     """RSA-PKCS1v1.5 of the password's MD5 hex, base64, as the app sends it.
 
-    `cryptography` is imported here and not at the top, so the AppDaemon app,
-    which never logs in, does not depend on it.
+    `cryptography` is imported here and not at the top, so the modules that
+    never log in do not need it to import.
     """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import padding

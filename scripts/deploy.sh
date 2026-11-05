@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
-# Deploy fp2_companion to a Home Assistant OS host over SSH.
+# Deploy the fp2_companion integration to a Home Assistant OS host over SSH.
 #
 #   scripts/deploy.sh
 #
 # The card is its own repository (sfortis/fp2-companion-card) and is
-# installed and updated through HACS, so this script deploys only the app.
+# installed and updated through the Marketplace, so this script deploys only
+# the integration.
 #
-# It assumes Home Assistant OS with the AppDaemon add-on and SSH access to the
-# host (for example the "Advanced SSH & Web Terminal" add-on with protection
-# mode off). Settings come from the environment, or from scripts/deploy.env,
-# which is not part of the repository:
+# It assumes SSH access to the host with Home Assistant's config folder at
+# /config, as the "Advanced SSH & Web Terminal" app gives it. Settings come
+# from the environment, or from scripts/deploy.env, which is not part of the
+# repository:
 #
 #   SSH_HOST     the host as ssh knows it            (default: homeassistant)
-#   ADDON_SLUG   the AppDaemon add-on's slug         (default: a0d7b954_appdaemon)
-#   STAGE        a writable folder on the host       (default: /root)
+#   CONFIG_DIR   Home Assistant's config folder      (default: /config)
+#   RESTART      1 restarts Home Assistant after the copy (default: 0)
 #
 # Only files tracked by git are deployed, every one is validated first, and a
-# file that does not parse refuses the whole deploy. AppDaemon reloads the app
-# by itself when a .py or .yaml file changes.
+# file that does not parse refuses the whole deploy. Home Assistant loads the
+# new code only when it restarts.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 [ -f "$ROOT/scripts/deploy.env" ] && . "$ROOT/scripts/deploy.env"
 SSH_HOST="${SSH_HOST:-homeassistant}"
-ADDON_SLUG="${ADDON_SLUG:-a0d7b954_appdaemon}"
-STAGE="${STAGE:-/root}"
+CONFIG_DIR="${CONFIG_DIR:-/config}"
+RESTART="${RESTART:-0}"
+PACKAGE="custom_components/fp2_companion"
 
 cd "$ROOT"
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -33,21 +35,12 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-deploy_app() {
-  # Home Assistant renamed the add-on containers from addon_ to app_ in
-  # 2026.2, so the name is resolved rather than written down.
-  local addon
-  addon="$(ssh "$SSH_HOST" "docker ps --format '{{.Names}}' | grep -E '^(app|addon)_${ADDON_SLUG}\$' | head -1")"
-  if [ -z "$addon" ]; then
-    echo "ERROR: no running container (app|addon)_${ADDON_SLUG} on $SSH_HOST" >&2
-    exit 1
-  fi
-
+deploy_integration() {
   local files=() f failed=0
   while IFS= read -r -d '' f; do files+=("$f"); done \
-    < <(git ls-files -z -- apps/fp2_companion)
+    < <(git ls-files -z -- "$PACKAGE")
   if [ ${#files[@]} -eq 0 ]; then
-    echo "ERROR: nothing under apps/fp2_companion is tracked by git." >&2
+    echo "ERROR: nothing under $PACKAGE is tracked by git." >&2
     exit 1
   fi
   echo "Validating..."
@@ -57,11 +50,8 @@ deploy_app() {
       *.py)
         python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
-      *.yaml)
-        python3 -c "
-import sys, yaml
-yaml.SafeLoader.add_constructor('!secret', lambda loader, node: '<secret>')
-yaml.safe_load(open(sys.argv[1]))" "$f" \
+      *.json)
+        python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
     esac
   done
@@ -70,17 +60,24 @@ yaml.safe_load(open(sys.argv[1]))" "$f" \
     exit 1
   fi
 
-  local tarball
+  local tarball remote="/tmp/_fp2_companion.tgz"
   tarball="$(mktemp)"
-  # The files go in without the leading apps/, so they land in /config/apps.
-  printf '%s\0' "${files[@]#apps/}" | tar czf "$tarball" -C apps --null -T -
-  scp -q "$tarball" "$SSH_HOST:$STAGE/_fp2_companion.tgz"
-  ssh "$SSH_HOST" "docker cp $STAGE/_fp2_companion.tgz $addon:/tmp/_fp2_companion.tgz \
-    && docker exec $addon tar xzf /tmp/_fp2_companion.tgz -C /config/apps \
-    && docker exec $addon rm /tmp/_fp2_companion.tgz \
-    && rm -f $STAGE/_fp2_companion.tgz"
+  # The files keep their custom_components/ prefix, so they land in
+  # $CONFIG_DIR/custom_components/fp2_companion. Files deleted from the repo
+  # are deleted on the host too, because the folder is replaced as a whole.
+  printf '%s\0' "${files[@]}" | tar czf "$tarball" --null -T -
+  scp -q "$tarball" "$SSH_HOST:$remote"
+  ssh "$SSH_HOST" "rm -rf '$CONFIG_DIR/$PACKAGE' \
+    && tar xzf $remote -C '$CONFIG_DIR' && rm -f $remote"
   rm -f "$tarball"
-  echo "App: ${#files[@]} file(s) to $addon:/config/apps/fp2_companion"
+  echo "Integration: ${#files[@]} file(s) to $SSH_HOST:$CONFIG_DIR/$PACKAGE"
+
+  if [ "$RESTART" = "1" ]; then
+    ssh "$SSH_HOST" "ha core restart"
+    echo "Home Assistant is restarting."
+  else
+    echo "Restart Home Assistant to load it (or run with RESTART=1)."
+  fi
 }
 
-deploy_app
+deploy_integration

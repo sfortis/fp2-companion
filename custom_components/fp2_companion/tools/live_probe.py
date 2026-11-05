@@ -10,10 +10,11 @@ Writes nothing to the device. Prints no header, token or user id. It found
 the protocol that `live_track.py` implements, and it checks that protocol
 without the app or the card:
 
-    docker exec $CONTAINER \
-        python3 /config/apps/fp2_companion/tools/live_probe.py <did> [seconds]
+    docker exec homeassistant python3 \
+        /config/custom_components/fp2_companion/tools/live_probe.py <did> [seconds]
 
-`$CONTAINER` is the AppDaemon container. Note that without the device page
+`homeassistant` is the Home Assistant container on Home Assistant OS, reached
+from the SSH app with protection mode off. Note that without the device page
 heartbeat (4.22.85) the FP2 sends nothing, so this probe sees pushes only
 while the app, the card or the Aqara app is writing it.
 """
@@ -23,14 +24,14 @@ import secrets
 import sys
 import time
 
-sys.path.insert(0, "/config/apps/fp2_companion")
-import aiohttp  # noqa: E402
-import aqara_cloud  # noqa: E402
-from aqara_cloud import AqaraCloud, STATIC_HEADERS, SessionStore, sign  # noqa: E402
+import _package
+import aiohttp
+from custom_components.fp2_companion import aqara_cloud
+from custom_components.fp2_companion.aqara_cloud import (
+    STATIC_HEADERS, AqaraCloud, SessionStore, sign)
 
-SESSION_FILE = "/share/appdaemon/fp2_companion/session.json"
-# Set by main(). AppDaemon imports every .py under apps/, tools included, so
-# nothing may run at import time.
+SESSION_FILE = f"{_package.STATE_DIR}/session.json"
+# Set by main(), so that nothing runs at import time.
 DID = None
 LISTEN = 15
 BODY = None
@@ -40,7 +41,7 @@ def identity(session):
     """The session's pair, else the built-in pair of its region."""
     if session.get("appid") and session.get("appkey"):
         return session["appid"], session["appkey"]
-    from regions import identity_for
+    from custom_components.fp2_companion.regions import identity_for
     return identity_for(session.get("area") or "EU")
 
 

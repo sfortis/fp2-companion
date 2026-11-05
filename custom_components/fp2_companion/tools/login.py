@@ -11,15 +11,16 @@ or a session file that was deleted. A second run reuses the PhoneId already in
 the session file, so the account does not collect a new parallel session each
 time.
 
-The app identity is the region's built-in pair, and a pair in the add-on's
-`/config/secrets.yaml` (`aqara_app_id`, `aqara_app_key`) is tried after it
-when there is one. The account and the password arrive on stdin, one per
-line, so neither appears in a process list or a shell history. Run it inside
-the AppDaemon container (`$CONTAINER`), typing both at the prompts, or feed
-them from a password manager:
+The app identity is the region's built-in pair, and a pair in Home
+Assistant's `/config/secrets.yaml` (`aqara_app_id`, `aqara_app_key`) is tried
+after it when there is one. The account and the password arrive on stdin,
+one per line, so neither appears in a process list or a shell history. Run it
+inside the Home Assistant container, typing both at the prompts, or feed them
+from a password manager. On Home Assistant OS, from the SSH app with
+protection mode off:
 
-    docker exec -it $CONTAINER \\
-        python3 /config/apps/fp2_companion/tools/login.py --did <did> --country GR
+    docker exec -it homeassistant python3 \\
+        /config/custom_components/fp2_companion/tools/login.py --did <did> --country GR
 
 After the login it reads the sensitivity of `--did` once, which proves the new
 session works. It prints only codes, the expiry date and that value, never a
@@ -32,12 +33,12 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from aqara_cloud import (  # noqa: E402
+import _package
+from custom_components.fp2_companion.aqara_cloud import (
     RID_SENSITIVITY, AqaraCloud, AqaraError, SessionStore)
 
 SECRETS_FILE = "/config/secrets.yaml"
-SESSION_FILE = "/share/appdaemon/fp2_companion/session.json"
+SESSION_FILE = str(pathlib.Path(_package.STATE_DIR) / "session.json")
 IDENTITY_KEYS = ("aqara_app_id", "aqara_app_key")
 
 

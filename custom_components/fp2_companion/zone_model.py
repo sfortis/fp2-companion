@@ -1,7 +1,7 @@
 """The FP2 zone grid, zone validation, zone comparison and the zone backups.
 
-Free of AppDaemon so every rule here can be tested without a Home Assistant or
-a network.
+Free of Home Assistant so every rule here can be tested without it or a
+network.
 
 The grid is 16 columns by 20 rows, and a zone is a list of block ids from 1 to
 320 in row-major order, so a block id is `row * 16 + column + 1` with both

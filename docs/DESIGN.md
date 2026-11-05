@@ -45,7 +45,7 @@ not depend on the cloud.
 11. A restore is chosen on the card from the list of backups, and the card
     shows the chosen backup's map before anything is written.
 12. The app identity (`Appid` and `Appkey`) is built in, one pair per
-    region. A pair in the add-on's `secrets.yaml` is optional and is tried
+    region. A pair in the integration's options is optional and is tried
     after the region's own.
 13. The app exposes the AI person detection mode as a switch and AI learning
     as a button. Learning runs for about 60 seconds.
@@ -92,8 +92,8 @@ not depend on the cloud.
     screen. While a device is watched, the app also writes the device page
     heartbeat every 60 seconds, because without it the FP2 sends no
     positions. Each push goes unretained to `fp2companion/<serial>/live`
-    through AppDaemon's MQTT plugin, and the card listens through Home
-    Assistant's `mqtt/subscribe`. Nothing reaches the recorder, but the
+    through Home Assistant's MQTT client, not the `mqtt.publish` action, and
+    the card listens through Home Assistant's `mqtt/subscribe`. Nothing reaches the recorder, but the
     live view needs an admin user.
 22. Superseded by decision 25 on 2026-11-04. Up to version 1.3.1 the card
     shipped inside the app folder, because HACS downloads an
@@ -107,14 +107,15 @@ not depend on the cloud.
     interface, rather than through AppDaemon's internal websocket. A
     resource for the card that a person added by hand was updated, never
     doubled, and further ones were reported, never deleted.
-23. The app makes sure the card's commands reach it. It cannot read the
-    MQTT plugin's `client_topics`, and subscribing regardless doubles every
-    command for a list that already covers it: Mosquitto 2.1.2 delivers a
+23. Superseded by decision 26 on 2026-11-05. Under AppDaemon the app made
+    sure the card's commands reached it. It could not read the MQTT
+    plugin's `client_topics`, and subscribing regardless doubled every
+    command for a list that already covered it: Mosquitto 2.1.2 delivers a
     message twice to a client subscribed to both `#` and
-    `fp2companion/cmd/#` (measured on 2026-11-01). So it publishes a probe
-    on each command topic, subscribes through the plugin's `mqtt/subscribe`
-    service only to a topic whose probe did not come back, and probes
-    again. A topic still silent is a warning in the log.
+    `fp2companion/cmd/#` (measured on 2026-11-01). So it published a probe
+    on each command topic, subscribed through the plugin's `mqtt/subscribe`
+    service only to a topic whose probe did not come back, and probed
+    again. A topic still silent was a warning in the log.
 24. A zone's attribute (detection, entrance and exit, edge) changes from the
     card the way the Aqara app changes it, as captured on 2026-11-01. Only
     changes from or to detection are made, because no direct change
@@ -138,13 +139,38 @@ not depend on the cloud.
     folder and the resource may hold a person's own changes. The card
     defines its element only once, so the old copy and the new one can
     both load while a person moves over.
+26. The app is a Home Assistant integration, `custom_components/fp2_companion`,
+    since 2026-11-05. Home Assistant 2026.11 made HACS its built-in
+    Marketplace, which manages integrations, dashboard cards, themes and
+    templates but no longer AppDaemon apps: `RETIRED_CATEGORIES` in
+    `homeassistant/components/marketplace/migration.py` retires the
+    category, an installed app keeps running without updates, and a repair
+    says so. The port keeps what a person sees. The entities are still MQTT
+    discovery entities with the same unique ids and entity ids, and the
+    topics and the card's commands are unchanged. `companion.py` is the app
+    as it was, blocking and run one callback at a time; `runtime.py` runs it
+    on an executor of one worker and provides what AppDaemon provided: the
+    log, timers, MQTT publish and subscribe, and the HomeKit devices, read
+    from the device registry instead of a template. The command probes of
+    decision 23 are gone, because Home Assistant's MQTT client subscribes to
+    the command topics themselves. The yaml became the integration's
+    options. The state moved from `/share/appdaemon/fp2_companion/` to
+    `.storage/fp2_companion/`, where Home Assistant keeps its own
+    credentials and which every backup includes, and the first setup copies
+    the session and the backups over, so nobody signs in again. One session
+    still allows one instance, so the integration raises a repair while the
+    AppDaemon app's folder is installed. Native entities on the HomeKit
+    device, which decision 3 rules out for MQTT discovery, are now possible
+    and left for later.
 
 ## Modules
 
-The pure modules sit beside the app, and the app file holds only the Home
-Assistant side.
+The pure modules sit beside the app, the app file holds what was the
+AppDaemon app, and only the runtime, the setup and the config flow import
+Home Assistant.
 
-- `aqara_cloud.py` is the cloud client and imports nothing from AppDaemon.
+- `aqara_cloud.py` is the cloud client and imports nothing from Home
+  Assistant.
   It owns the session file and replaces it atomically (a temporary file,
   mode 0600, then a rename). It signs requests, handles code 108 with one
   refresh and one retry, and refuses to write any resource or value outside
@@ -159,11 +185,14 @@ Assistant side.
   thread and event loop. It handles the leases, subscribes and renews every
   watched device, writes the heartbeat, reconnects with a backoff, and
   parses each push into targets with their place on the grid.
-- `command_topics.py` probes the MQTT command topics and subscribes to the
-  silent ones (decision 23).
-- `fp2_companion.py` is the AppDaemon app: discovery, commands, reads, writes
-  and their readback, backups, entities and status.
-- `tools/` holds command line helpers that run inside the AppDaemon
+- `companion.py` is the app: discovery, commands, reads, writes and their
+  readback, backups, entities and status.
+- `runtime.py` runs the app inside Home Assistant (decision 26): its worker
+  thread, the log, timers, MQTT and the device registry.
+- `__init__.py` sets the integration up: it waits for MQTT, prepares the
+  state folder, copies the AppDaemon app's state once and starts the app.
+  `config_flow.py` adds it with no questions and holds the options.
+- `tools/` holds command line helpers that run inside the Home Assistant
   container: `login.py` (sign-in without the card), `zone_test.py` (decision
   10) and `live_probe.py` (checks the live protocol without the app).
 

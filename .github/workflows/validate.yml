@@ -14,7 +14,14 @@ jobs:
     steps:
       - uses: hacs/action@main
         with:
-          category: appdaemon
+          category: integration
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
 
   tests:
     name: Tests
@@ -29,3 +36,16 @@ jobs:
           pip install pytest pyyaml cryptography
       - name: Python tests
         run: python -m pytest tests -q
+
+  ha-tests:
+    name: Tests in Home Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install
+        run: pip install pytest-homeassistant-custom-component==0.13.375
+      - name: Integration tests
+        run: python -m pytest -c tests_ha/pytest.ini tests_ha -q

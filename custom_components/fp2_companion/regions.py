@@ -35,8 +35,8 @@ AREA_HOSTS = {
 # open-source Aqara-LANLink integration, and they are the same for every user.
 # Each pair is stored as base64 of "appid:appkey" reversed. That is
 # obfuscation, not encryption: it only keeps generic secret scanners from
-# reporting a value that is public anyway. A pair in secrets.yaml (app_id,
-# app_key, app_identities) is tried after the region's own.
+# reporting a value that is public anyway. A pair in the integration's
+# options (app_identities) is tried after the region's own.
 _IDENTITIES = {
     "EU": "M0U4V2ZISW5CS1hVcGdZR3F6QnJZRFJPSWsxMHpkZEo6OTM4NjMzMzMxNjcyNjU1MGY0ODkxZWI3",
     "AF": "M0U4V2ZISW5CS1hVcGdZR3F6QnJZRFJPSWsxMHpkZEo6OTM4NjMzMzMxNjcyNjU1MGY0ODkxZWI3",
