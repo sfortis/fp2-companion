@@ -84,9 +84,10 @@ manages AppDaemon apps since Home Assistant 2026.11, and the app and the
 integration must not run side by side: both would refresh the same Aqara
 session and sign each other out. So:
 
-1. Delete the app's folder, `appdaemon/apps/fp2_companion/` in Home
-   Assistant's configuration folder (or the AppDaemon app's own `apps/`
-   folder if you copied it there), and its entry in AppDaemon's `apps.yaml`.
+1. Delete the app's folder: `appdaemon/apps/fp2-companion/` in Home
+   Assistant's configuration folder when HACS installed it, or the
+   `fp2_companion/` folder you copied by hand, and its entry in AppDaemon's
+   `apps.yaml` if you added one.
    Restart AppDaemon, or remove AppDaemon if nothing else uses it.
 2. Install and add the integration as above. Its first start copies the
    session and the zone backups from `/share/appdaemon/fp2_companion/`, so

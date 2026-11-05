@@ -20,7 +20,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
 
 from .const import (
-    APPDAEMON_APP_DIR,
+    APPDAEMON_APP_DIRS,
     APPDAEMON_STATE_DIR,
     BASE_TOPIC,
     CONF_APP_IDENTITIES,
@@ -51,8 +51,8 @@ async def async_setup_entry(
     # on every card command and refresh one session, signing each other out.
     # So the integration waits, and Home Assistant retries the setup until
     # the folder is gone. Only then is the app's session the newest one.
-    old_app = hass.config.path(APPDAEMON_APP_DIR)
-    if await hass.async_add_executor_job(os.path.isdir, old_app):
+    old_app = await hass.async_add_executor_job(_installed_app, hass.config.path())
+    if old_app is not None:
         ir.async_create_issue(
             hass,
             DOMAIN,
@@ -90,6 +90,15 @@ async def _async_options_updated(
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+def _installed_app(config_dir: str) -> str | None:
+    """The folder of the AppDaemon app, if it is still installed."""
+    for folder in APPDAEMON_APP_DIRS:
+        path = os.path.join(config_dir, folder)
+        if os.path.isdir(path):
+            return path
+    return None
+
+
 def _prepare_state(state_dir: str) -> None:
     """Create the state folder. On the first setup after the AppDaemon app,
     copy its session and backups, so nobody signs in again; the originals
@@ -107,8 +116,7 @@ def _prepare_state(state_dir: str) -> None:
                 backups, os.path.join(state_dir, "backups"), dirs_exist_ok=True
             )
         _LOGGER.info(
-            "Copied the session and the zone backups of the AppDaemon app "
-            "from %s",
+            "Copied the session and the zone backups of the AppDaemon app from %s",
             APPDAEMON_STATE_DIR,
         )
 

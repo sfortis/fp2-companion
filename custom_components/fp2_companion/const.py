@@ -24,8 +24,9 @@ STATE_DIR = ".storage/fp2_companion"
 # setup copies them, so nobody signs in again and the backups stay.
 APPDAEMON_STATE_DIR = "/share/appdaemon/fp2_companion"
 
-# Where HACS put the AppDaemon app, under the config folder. While it is
-# there, the integration does not start: the app may be running on the same
-# session and the same topics.
-APPDAEMON_APP_DIR = "appdaemon/apps/fp2_companion"
+# Where the AppDaemon app may be, under the config folder: HACS named the
+# folder after the repository, fp2-companion, and a copy by hand kept the
+# repository's apps/fp2_companion. While one is there, the integration does
+# not start: the app may be running on the same session and the same topics.
+APPDAEMON_APP_DIRS = ("appdaemon/apps/fp2-companion", "appdaemon/apps/fp2_companion")
 ISSUE_APPDAEMON_APP = "appdaemon_app_installed"

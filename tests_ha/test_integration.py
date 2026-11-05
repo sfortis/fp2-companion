@@ -169,13 +169,15 @@ async def test_the_appdaemon_state_is_copied_once(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize("folder", ["fp2-companion", "fp2_companion"])
 async def test_it_waits_while_the_appdaemon_app_is_installed(
-        hass, mqtt, fp2_device, tmp_path, monkeypatch) -> None:
+        hass, mqtt, fp2_device, tmp_path, monkeypatch, folder) -> None:
+    """HACS names the folder fp2-companion; a copy by hand, fp2_companion."""
     old = tmp_path / "appdaemon_state"
     old.mkdir()
     (old / "session.json").write_text(json.dumps({"phone_id": "kept"}))
     monkeypatch.setattr(integration, "APPDAEMON_STATE_DIR", str(old))
-    old_app = hass.config.path("appdaemon", "apps", "fp2_companion")
+    old_app = hass.config.path("appdaemon", "apps", folder)
     await hass.async_add_executor_job(
         lambda: os.makedirs(old_app, exist_ok=True))
     entry = MockConfigEntry(domain=DOMAIN)

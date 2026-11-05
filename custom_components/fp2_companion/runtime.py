@@ -86,9 +86,7 @@ class HassFp2Companion(Fp2Companion):
         try:
             func(*args)
         except Exception:
-            _LOGGER.exception(
-                "Error in %s", getattr(func, "__qualname__", repr(func))
-            )
+            _LOGGER.exception("Error in %s", getattr(func, "__qualname__", repr(func)))
 
     @callback
     def _submit(self, func: Callable[..., Any], *args: Any) -> None:
@@ -107,9 +105,7 @@ class HassFp2Companion(Fp2Companion):
     ) -> int:
         """Call `func(kwargs)` on the worker in `delay` seconds."""
         handle = next(self._handles)
-        self.hass.loop.call_soon_threadsafe(
-            self._arm_in, handle, func, delay, kwargs
-        )
+        self.hass.loop.call_soon_threadsafe(self._arm_in, handle, func, delay, kwargs)
         return handle
 
     @callback
@@ -192,9 +188,7 @@ class HassFp2Companion(Fp2Companion):
         except HomeAssistantError as exc:
             _LOGGER.warning("Could not publish to %s: %s", topic, exc)
 
-    def subscribe(
-        self, topics: list[str], func: Callable[[str, str], Any]
-    ) -> None:
+    def subscribe(self, topics: list[str], func: Callable[[str, str], Any]) -> None:
         """Call `func(topic, payload)` on the worker for every message on
         `topics`. Returns once Home Assistant has subscribed."""
         asyncio.run_coroutine_threadsafe(
@@ -227,9 +221,7 @@ class HassFp2Companion(Fp2Companion):
         areas = ar.async_get(self.hass)
         rows: dict[str, dict[str, Any]] = {}
         for entry in self.hass.config_entries.async_entries(HOMEKIT_DOMAIN):
-            for device in dr.async_entries_for_config_entry(
-                devices, entry.entry_id
-            ):
+            for device in dr.async_entries_for_config_entry(devices, entry.entry_id):
                 model = device.model
                 if not (isinstance(model, str) and model.startswith("PS-")):
                     continue
