@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "FP2 Companion finds every Aqara FP2 paired through HomeKit Device by itself. Sign in to Aqara on the FP2 Companion card once it is set up.\n\nIf the AppDaemon app of FP2 Companion is still installed, remove it first: the two must not share the Aqara session."
+      }
+    },
+    "abort": {
+      "mqtt_required": "Set up the MQTT integration first. FP2 Companion publishes its entities and receives the card's commands over MQTT.",
+      "single_instance_allowed": "FP2 Companion is already set up. One entry serves every FP2."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "devices": "FP2s not paired through HomeKit",
+          "exclude": "FP2s to leave alone",
+          "backups_keep": "Zone backups to keep per FP2",
+          "token_check_time": "Daily token check",
+          "app_identities": "Extra Aqara app identities"
+        },
+        "data_description": {
+          "devices": "The serial of each FP2, as 54EF44A1B2C3.",
+          "exclude": "The serial of each FP2 this integration should not serve.",
+          "backups_keep": "A backup is written whenever the zones change and before every zone write.",
+          "token_check_time": "The token is refreshed at this time when fewer than three days remain.",
+          "app_identities": "Optional, as app_id:app_key. Tried after the built-in identity of the region."
+        }
+      }
+    },
+    "error": {
+      "invalid_serial": "Every entry must be a 12-character FP2 serial, as 54EF44A1B2C3.",
+      "invalid_identity": "Every entry must be app_id:app_key."
+    }
+  },
+  "issues": {
+    "appdaemon_app_installed": {
+      "title": "The AppDaemon app of FP2 Companion is still installed",
+      "description": "FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration refresh the same Aqara session and sign each other out, and both publish the same entities.\n\nDelete that folder and the `fp2_companion` entry of your AppDaemon `apps.yaml`, then restart AppDaemon. This warning goes away the next time the integration starts."
+    }
+  }
+}

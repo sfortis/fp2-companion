@@ -5,6 +5,12 @@ channel, so its settings go through the Aqara cloud app API (`aqara_cloud.py`).
 This app exposes them as MQTT discovery entities and feeds the zone card.
 Plan and every owner decision: docs/DESIGN.md
 
+It runs inside Home Assistant as the fp2_companion integration (decision 26).
+What Home Assistant provides, the log, timers, MQTT and the device registry,
+comes from a runtime (`runtime.py`) that subclasses `Fp2Companion`; the tests
+give it a fake one. The code here blocks on the cloud, so the runtime calls it
+on a worker thread of its own, one callback at a time.
+
 One app serves every FP2 (decision 17). It finds them in Home Assistant as
 HomeKit devices of model PS-S02D, PS-S02E or PS-T02E, so nothing about a device is
 written in the yaml: the cloud device id comes from the serial number, the
@@ -28,13 +34,10 @@ import threading
 import time
 import unicodedata
 
-import hassapi as hass
-
 from .aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          RID_SENSITIVITY, AqaraAuthError, AqaraCloud,
                          AqaraError, AqaraRefused, SessionStore,
                          did_from_serial, jwt_exp)
-from .command_topics import CommandTopics
 from .live_track import LiveTracker, to_grid
 from .regions import COUNTRIES
 from .zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
@@ -49,12 +52,11 @@ from .zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
                         without_blocks_of, write_backup, zone_landed,
                         zones_differ)
 
-STATE_DIR = "/share/appdaemon/fp2_companion"
-SESSION_FILE = f"{STATE_DIR}/session.json"
-BACKUP_ROOT = f"{STATE_DIR}/backups"
-RUNTIME_FILE = f"{STATE_DIR}/runtime.json"
-# Where versions up to 1.3.1 copied the card (decision 22). Only looked at.
-OLD_CARD_DIR = "/homeassistant/www/fp2-companion"
+# What the app keeps in the folder the runtime names in args["state_dir"]:
+# the one session, the zone backups and the zone selects published so far.
+SESSION_NAME = "session.json"
+BACKUP_FOLDER = "backups"
+RUNTIME_NAME = "runtime.json"
 
 # What a zone write did, carried to its readback. Zones are matched by
 # rangeId and never by name (owner, 2026-10-30).
@@ -127,24 +129,6 @@ FP2_MODELS = ("PS-S02D", "PS-S02E", "PS-T02E")
 # HomeKit through an Aqara hub and are skipped without a word.
 FP2_MODEL_FAMILIES = ("PS-S02", "PS-T02")
 
-# Every Aqara PS device Home Assistant knows over HomeKit, with its model;
-# parse_discovery decides which of them are FP2s. `original` is the name the
-# integration gave the device, which its entity ids were built from; `name`
-# is the one a person may have given it since.
-DISCOVERY_TEMPLATE = """{%- set ns = namespace(out=[]) -%}
-{%- for d in integration_entities('homekit_controller') | map('device_id')
-      | reject('none') | unique -%}
-  {%- set model = device_attr(d, 'model') -%}
-  {%- if model is string and model.startswith('PS-') -%}
-    {%- set ns.out = ns.out + [{'serial': device_attr(d, 'serial_number'),
-        'model': model,
-        'original': device_attr(d, 'name'),
-        'name': device_attr(d, 'name_by_user') or device_attr(d, 'name'),
-        'area': area_name(d)}] -%}
-  {%- endif -%}
-{%- endfor -%}
-{{ ns.out | tojson }}"""
-
 
 def slugify(text):
     """Close to Home Assistant's slugify for the names this app meets."""
@@ -203,12 +187,13 @@ class Fp2Device:
     """One FP2: its values, zones, backups, entities, topics and status.
 
     Shared services (logging, timers, MQTT, the cloud lock, the clock) come
-    from the app, so a device never talks to AppDaemon by itself.
+    from the app, so a device never talks to Home Assistant by itself.
     """
 
     def __init__(self, app, info):
         self.app = app
-        self.info = dict(info, backup_dir=os.path.join(BACKUP_ROOT, info["did"]))
+        self.info = dict(info,
+                         backup_dir=os.path.join(app.backup_root, info["did"]))
         self.base = f"{app.base}/{info['key']}"
         self.cloud = app._make_cloud(info["did"])
         self.values = {}
@@ -742,7 +727,7 @@ class Fp2Device:
         d = self.info
         block = {"identifiers": [f"fp2_companion_{d['did']}"],
                  "name": f"{d['name']} Settings",
-                 "manufacturer": "AppDaemon", "model": "fp2_companion"}
+                 "manufacturer": "FP2 Companion", "model": "fp2_companion"}
         if d.get("area"):
             block["suggested_area"] = d["area"]
         return block
@@ -827,20 +812,33 @@ class Fp2Device:
         # One list for every device; a device retires only its own selects,
         # which are the object ids that carry its device id.
         mine = f"fp2_companion_{self.info['did'].replace('.', '_')}_"
-        runtime = _load_json(RUNTIME_FILE)
+        runtime = _load_json(self.app.runtime_file)
         known = set(runtime.get("zone_selects", []))
         for object_id in {o for o in known if o.startswith(mine)} - published:
             self._pub(f"{self.app.disc}/select/{object_id}/config", "")
             self.app.log(f"zone select {object_id} retired")
         runtime["zone_selects"] = sorted(
             {o for o in known if not o.startswith(mine)} | published)
-        _save_json(RUNTIME_FILE, runtime)
+        _save_json(self.app.runtime_file, runtime)
 
 
-class Fp2Companion(hass.Hass):
+class Fp2Companion:
+    """Every FP2 the integration serves, and what they share.
+
+    Home Assistant's side comes from the runtime, a subclass that provides
+    `args` (the options), `log(text, level)`, `run_in(callback, seconds,
+    **kwargs)`, `run_daily(callback, "HH:MM:SS")`, `cancel_timer(handle,
+    silent)`, `publish(topic, payload, retain, qos)`, `subscribe(topics,
+    callback)` and `find_devices()`. A timer's callback receives its keyword
+    arguments as one dict, as it did under AppDaemon, where this class began.
+    """
 
     def initialize(self):
         a = self.args
+        state_dir = a["state_dir"]
+        self.session_file = os.path.join(state_dir, SESSION_NAME)
+        self.backup_root = os.path.join(state_dir, BACKUP_FOLDER)
+        self.runtime_file = os.path.join(state_dir, RUNTIME_NAME)
         self.base = a.get("base_topic", "fp2companion")
         self.disc = a.get("discovery_prefix", "homeassistant")
         self.backups_keep = int(a.get("backups_keep", 50))
@@ -848,7 +846,7 @@ class Fp2Companion(hass.Hass):
         self._app_id = a.get("app_id")
         self._app_key = a.get("app_key")
         # Every app identity pair a sign-in may try, beyond the default one
-        # (decision 19). From secrets.yaml, never from the repo (decision 20).
+        # (decision 19). From the options, never from the repo (decision 20).
         self._identities = [tuple(p) for p in a.get("app_identities") or []
                             if isinstance(p, (list, tuple)) and len(p) == 2]
         self._manual = a.get("devices") or []
@@ -857,10 +855,11 @@ class Fp2Companion(hass.Hass):
         self._warned_models = set()
         self._now = time.time
 
-        # Every cloud call goes through this lock. AppDaemon already runs one
-        # app's callbacks on one thread, but a refresh that interleaved with
-        # another call would revoke the token that call carries, and every
-        # device shares the one session.
+        # Every cloud call goes through this lock. The runtime already runs
+        # the app's callbacks one at a time, but the live tracker calls the
+        # cloud from its own thread, a refresh that interleaved with another
+        # call would revoke the token that call carries, and every device
+        # shares the one session.
         self.lock = threading.Lock()
         self.devices = {}
         # The zone types the Aqara app offers, shared by every FP2 on the
@@ -870,17 +869,15 @@ class Fp2Companion(hass.Hass):
         self.session = self._make_cloud("")
         self.tracker = self._make_tracker()
 
-        # namespace="mqtt" is REQUIRED: the MQTT plugin publishes its events in
-        # its own namespace, and without it the app ignores every command.
-        self.listen_event(self._on_cmd, "MQTT_MESSAGE", namespace="mqtt")
-        self.commands = CommandTopics(self, self.base)
-        self.commands.start()
+        # The app's commands and every device's (`_on_cmd`).
+        self.subscribe([f"{self.base}/cmd/#", f"{self.base}/+/cmd/#"],
+                       self._on_cmd)
         self.run_in(self._check_old_card, 1)
         self.run_daily(self.token_check, a.get("token_check_time", "04:10:00"))
         self.run_in(self.start, 5)
 
     def _make_cloud(self, did):
-        return AqaraCloud(SessionStore(SESSION_FILE), self._app_id,
+        return AqaraCloud(SessionStore(self.session_file), self._app_id,
                           self._app_key, did, identities=self._identities)
 
     def _check_old_card(self, kwargs=None):
@@ -888,8 +885,8 @@ class Fp2Companion(hass.Hass):
         folder and added a dashboard resource for it (decision 22). The card
         is its own HACS repository since then (decision 25), so that copy no
         longer updates. The app says how to remove it and deletes nothing."""
-        old = self.args.get("card_dir", OLD_CARD_DIR)
-        if os.path.isdir(old):
+        old = self.args.get("card_dir")
+        if old and os.path.isdir(old):
             self.log(f"{old} holds the card an older version of this app "
                      f"installed, and it no longer updates. Install FP2 "
                      f"Companion Card from HACS, then delete the dashboard "
@@ -902,8 +899,9 @@ class Fp2Companion(hass.Hass):
                            self.lock, log=self.log)
 
     def terminate(self):
-        """AppDaemon calls this before a reload. Without it the live socket's
-        thread and loop would survive every deploy, still subscribed."""
+        """The runtime calls this when the integration unloads or reloads.
+        Without it the live socket's thread and loop would survive every
+        reload, still subscribed."""
         tracker, self.tracker = self.tracker, None
         if tracker is not None:
             tracker.shutdown()
@@ -914,9 +912,9 @@ class Fp2Companion(hass.Hass):
         at most one retry pending: a rescan pressed while nothing is found
         replaces the waiting retry instead of starting a second loop."""
         if self._retry is not None:
-            # When the retry itself called this, AppDaemon has already taken
-            # its handle off the schedule, and a plain cancel_timer logs
-            # "Invalid callback handle" (reported in PR #1).
+            # When the retry itself called this, its handle has already
+            # fired, and a plain cancel_timer would log an invalid handle
+            # (reported in PR #1).
             self.cancel_timer(self._retry, silent=True)
             self._retry = None
         known = set(self.devices)
@@ -939,10 +937,9 @@ class Fp2Companion(hass.Hass):
         Assistant keeps its entities, because removing them would also remove
         the dashboard rows a person set up."""
         try:
-            raw = self.render_template(DISCOVERY_TEMPLATE)
-            # AppDaemon hands back a native value when the text parses as a
-            # Python literal, and the raw text when it does not (a JSON null).
-            found = raw if isinstance(raw, list) else json.loads(raw)
+            # Every Aqara PS device Home Assistant knows over HomeKit, with
+            # its model; parse_discovery decides which of them are FP2s.
+            found = self.find_devices()
         except Exception as exc:              # noqa: BLE001
             # Anything at all: at startup Home Assistant may still be coming
             # up, and an exception here would also skip the retry in start().
@@ -1051,17 +1048,15 @@ class Fp2Companion(hass.Hass):
             device._refuse(reason)
 
     # ------------------------------------------------------------- commands
-    def _on_cmd(self, event_name, data, kwargs):
+    def _on_cmd(self, topic, payload):
         """`<base>/cmd/<command>` is for the app, `<base>/<key>/cmd/<command>`
-        for one device. Every app in this namespace receives every MQTT
-        message, so the prefix test keeps another app's commands out."""
-        topic = (data or {}).get("topic", "")
+        for one device. The subscription covers only those, and the prefix
+        test stays as a guard."""
+        topic = topic or ""
         if not topic.startswith(f"{self.base}/"):
             return
         rest = topic[len(self.base) + 1:]
-        payload = str((data or {}).get("payload") or "").strip()
-        if self.commands.consume(topic, payload):
-            return
+        payload = str(payload or "").strip()
         if rest.startswith("cmd/"):
             key = rest[len("cmd/"):]
             if key == "login":
@@ -1091,7 +1086,8 @@ class Fp2Companion(hass.Hass):
             "json_attributes_topic": f"{self.base}/hub/attrs",
             "icon": "mdi:radar",
             "device": {"identifiers": ["fp2_companion"], "name": "FP2 Companion",
-                       "manufacturer": "AppDaemon", "model": "fp2_companion"}})
+                       "manufacturer": "FP2 Companion",
+                       "model": "fp2_companion"}})
         devices = [{k: d.info[k] for k in ("key", "did", "name", "prefix",
                                             "area")}
                    for d in self.devices.values()]
@@ -1103,21 +1099,19 @@ class Fp2Companion(hass.Hass):
 
     def _pub(self, topic, payload):
         text = payload if isinstance(payload, str) else json.dumps(payload)
-        self.call_service("mqtt/publish", topic=topic, payload=text,
-                          retain=True)
+        self.publish(topic, text, retain=True)
 
     def _live_pub(self, did, message):
-        """One live message, from the tracker's publish thread. It goes
-        straight to the broker through the MQTT plugin and is not retained:
-        at more than one a second, a call through Home Assistant would be an
-        event row each, and a retained position would be stale on arrival."""
+        """One live message, from the tracker's publish thread. It is not
+        retained, because a retained position would be stale on arrival. It
+        goes to the broker through Home Assistant's MQTT client directly,
+        not through the mqtt.publish action, so it is no event row."""
         device = next((d for d in self.devices.values()
                        if d.info["did"] == did), None)
         if device is None:
             return
-        self.call_service("mqtt/publish", namespace="mqtt",
-                          topic=f"{device.base}/live",
-                          payload=json.dumps(message), qos=0, retain=False)
+        self.publish(f"{device.base}/live", json.dumps(message), retain=False,
+                     qos=0)
 
 
 def mask_account(account):
