@@ -15,7 +15,8 @@ from typing import Any
 
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
 
@@ -28,6 +29,7 @@ from .const import (
     CONF_DEVICES,
     CONF_EXCLUDE,
     CONF_TOKEN_CHECK_TIME,
+    COPIED_MARKER,
     DEFAULT_BACKUPS_KEEP,
     DEFAULT_TOKEN_CHECK_TIME,
     DOMAIN,
@@ -70,8 +72,22 @@ async def async_setup_entry(
     await hass.async_add_executor_job(_prepare_state, state_dir)
 
     app = HassFp2Companion(hass, _app_args(hass, entry, state_dir))
-    await app.async_start()
+    try:
+        await app.async_start()
+    except BaseException:
+        # Whatever the app subscribed to before it failed must not stay
+        # behind, or a reload would run every command twice.
+        await app.async_stop()
+        raise
     entry.runtime_data = app
+
+    async def _async_stop_app(_event: Event) -> None:
+        # Home Assistant does not unload entries when it shuts down.
+        await app.async_stop()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_stop_app)
+    )
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -82,6 +98,13 @@ async def async_unload_entry(
     """Stop the app."""
     await entry.runtime_data.async_stop()
     return True
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: Fp2CompanionConfigEntry
+) -> None:
+    """Take the repair with the entry."""
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
 
 
 async def _async_options_updated(
@@ -101,24 +124,52 @@ def _installed_app(config_dir: str) -> str | None:
 
 def _prepare_state(state_dir: str) -> None:
     """Create the state folder. On the first setup after the AppDaemon app,
-    copy its session and backups, so nobody signs in again; the originals
-    stay."""
-    first = not os.path.exists(os.path.join(state_dir, "session.json"))
+    copy its session and backups, so nobody signs in again.
+
+    A marker file says the copy went through, so a session made before the
+    integration (with `tools/login.py`), or a copy that stopped halfway, does
+    not decide it. A file that is already here is never overwritten: it is
+    the newer one. Once everything is copied, the old session is deleted: its
+    token would stay valid for weeks, as the refresh happens only three days
+    before it expires, and it is the same session."""
     os.makedirs(state_dir, mode=0o700, exist_ok=True)
-    if first and os.path.isfile(os.path.join(APPDAEMON_STATE_DIR, "session.json")):
-        for name in ("session.json", "runtime.json"):
-            source = os.path.join(APPDAEMON_STATE_DIR, name)
-            if os.path.isfile(source):
-                shutil.copy2(source, os.path.join(state_dir, name))
-        backups = os.path.join(APPDAEMON_STATE_DIR, "backups")
-        if os.path.isdir(backups):
-            shutil.copytree(
-                backups, os.path.join(state_dir, "backups"), dirs_exist_ok=True
-            )
-        _LOGGER.info(
-            "Copied the session and the zone backups of the AppDaemon app from %s",
-            APPDAEMON_STATE_DIR,
+    marker = os.path.join(state_dir, COPIED_MARKER)
+    if os.path.exists(marker) or not os.path.isfile(
+        os.path.join(APPDAEMON_STATE_DIR, "session.json")
+    ):
+        return
+    for name in ("session.json", "runtime.json"):
+        source = os.path.join(APPDAEMON_STATE_DIR, name)
+        target = os.path.join(state_dir, name)
+        if os.path.isfile(source) and not os.path.exists(target):
+            shutil.copy2(source, target)
+    backups = os.path.join(APPDAEMON_STATE_DIR, "backups")
+    if os.path.isdir(backups):
+        shutil.copytree(
+            backups,
+            os.path.join(state_dir, "backups"),
+            copy_function=_copy_missing,
+            dirs_exist_ok=True,
         )
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write("copied from the AppDaemon app\n")
+    _LOGGER.info(
+        "Copied the session and the zone backups of the AppDaemon app from %s",
+        APPDAEMON_STATE_DIR,
+    )
+    try:
+        os.remove(os.path.join(APPDAEMON_STATE_DIR, "session.json"))
+    except OSError as exc:
+        _LOGGER.warning(
+            "Could not delete the old session in %s, delete it yourself: %s",
+            APPDAEMON_STATE_DIR,
+            exc,
+        )
+
+
+def _copy_missing(source: str, target: str) -> None:
+    if not os.path.exists(target):
+        shutil.copy2(source, target)
 
 
 def _app_args(

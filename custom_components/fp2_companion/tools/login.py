@@ -38,6 +38,7 @@ from custom_components.fp2_companion.aqara_cloud import (
     RID_SENSITIVITY, AqaraCloud, AqaraError, SessionStore)
 
 SECRETS_FILE = "/config/secrets.yaml"
+ENTRIES_FILE = "/config/.storage/core.config_entries"
 SESSION_FILE = str(pathlib.Path(_package.STATE_DIR) / "session.json")
 IDENTITY_KEYS = ("aqara_app_id", "aqara_app_key")
 
@@ -56,6 +57,24 @@ def load_identity(path):
     return str(secrets["aqara_app_id"]), str(secrets["aqara_app_key"])
 
 
+def load_identity_from_options(path):
+    """The first `app_id:app_key` of the integration's options, or
+    (None, None)."""
+    try:
+        with open(path) as handle:
+            entries = json.load(handle)["data"]["entries"]
+    except (FileNotFoundError, KeyError, ValueError):
+        return None, None
+    for entry in entries:
+        if entry.get("domain") != "fp2_companion":
+            continue
+        for value in entry.get("options", {}).get("app_identities", []):
+            app_id, sep, app_key = str(value).partition(":")
+            if sep and app_id.strip() and app_key.strip():
+                return app_id.strip(), app_key.strip()
+    return None, None
+
+
 def read_credentials():
     if sys.stdin.isatty():
         return input("account: ").strip(), getpass.getpass("password: ")
@@ -69,6 +88,9 @@ def read_credentials():
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--secrets", default=SECRETS_FILE)
+    parser.add_argument("--entries", default=ENTRIES_FILE,
+                        help="Home Assistant's config entries, where the "
+                             "integration's options are")
     parser.add_argument("--session", default=SESSION_FILE)
     parser.add_argument("--did", required=True,
                         help="the FP2 whose sensitivity is read to verify")
@@ -77,7 +99,10 @@ def main():
                              "app, for example GR or US")
     args = parser.parse_args()
 
+    # secrets.yaml first, then the pair in the integration's options.
     appid, appkey = load_identity(args.secrets)
+    if appid is None:
+        appid, appkey = load_identity_from_options(args.entries)
     account, password = read_credentials()
     cloud = AqaraCloud(SessionStore(args.session), appid, appkey, args.did)
     report = {}

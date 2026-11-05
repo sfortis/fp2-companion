@@ -84,14 +84,17 @@ manages AppDaemon apps since Home Assistant 2026.11, and the app and the
 integration must not run side by side: both would refresh the same Aqara
 session and sign each other out. So:
 
-1. Delete the app's folder: `appdaemon/apps/fp2-companion/` in Home
-   Assistant's configuration folder when HACS installed it, or the
-   `fp2_companion/` folder you copied by hand, and its entry in AppDaemon's
-   `apps.yaml` if you added one.
-   Restart AppDaemon, or remove AppDaemon if nothing else uses it.
+1. Stop the app: stop AppDaemon, or remove the `fp2_companion` entry from
+   AppDaemon's `apps.yaml` (if you added one) and restart it. Then delete
+   the app's folder: `appdaemon/apps/fp2-companion/` in Home Assistant's
+   configuration folder when HACS installed it, or the `fp2_companion/`
+   folder you copied by hand. (The integration cannot tell whether AppDaemon
+   unloads an app when its folder disappears, hence this order.)
 2. Install and add the integration as above. Its first start copies the
    session and the zone backups from `/share/appdaemon/fp2_companion/`, so
-   you stay signed in and keep every backup. The entities, their ids and
+   you stay signed in and keep every backup, and then deletes the old
+   `session.json` there, so no second valid token is left behind. A file
+   that is already in the new place is never overwritten. The entities, their ids and
    the card stay as they were.
 3. Settings you had in `fp2_companion.yaml` (`devices`, `exclude`,
    `backups_keep`, `token_check_time`) go into the integration's options.
@@ -159,7 +162,9 @@ it works.
   A ceiling mount has not been checked.
 - Accounts in the China region (CN) cannot sign in with the built-in Aqara
   app identity. Such an account needs a working pair of its own, as
-  `app_id:app_key` in the integration's options.
+  `app_id:app_key` in the integration's options; `tools/login.py` reads the
+  pair from `secrets.yaml` (`aqara_app_id`, `aqara_app_key`) or, if there is
+  none, from the options.
 - A zone changes its attribute only from or to detection. To turn an
   entrance zone into the edge, make it a detection zone first.
 

@@ -37,7 +37,7 @@
   "issues": {
     "appdaemon_app_installed": {
       "title": "L'app AppDaemon di FP2 Companion è ancora installata",
-      "description": "FP2 Companion ora funziona come integrazione, ma l'app AppDaemon è ancora in `{path}`. Se AppDaemon la esegue, app e integrazione eseguirebbero entrambe ogni comando della card e rinnoverebbero la stessa sessione Aqara, disconnettendosi a vicenda. Per questo l'integrazione aspetta.\n\nCancella quella cartella e la voce `fp2_companion` dal file `apps.yaml` di AppDaemon, poi riavvia AppDaemon. L'integrazione parte da sola, mantiene la sessione Aqara e i backup delle zone, e questa riparazione sparisce."
+      "description": "FP2 Companion ora funziona come integrazione, ma l'app AppDaemon è ancora in `{path}`. Se AppDaemon la esegue, app e integrazione eseguirebbero entrambe ogni comando della card e rinnoverebbero la stessa sessione Aqara, disconnettendosi a vicenda. Per questo l'integrazione aspetta.\n\nPrima ferma AppDaemon, oppure togli la voce `fp2_companion` da `apps.yaml` e riavvialo, così l'app non è più in esecuzione. Poi cancella quella cartella. La vecchia sessione in `/share/appdaemon/fp2_companion/` la cancella l'integrazione dopo averla copiata. L'integrazione parte da sola, mantiene la sessione Aqara e i backup delle zone, e questa riparazione sparisce."
     }
   }
 }

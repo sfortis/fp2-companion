@@ -25,6 +25,7 @@ from homeassistant.helpers.selector import (
     NumberSelectorMode,
     TextSelector,
     TextSelectorConfig,
+    TextSelectorType,
     TimeSelector,
 )
 
@@ -55,7 +56,7 @@ OPTIONS_SCHEMA = vol.Schema(
             CONF_TOKEN_CHECK_TIME, default=DEFAULT_TOKEN_CHECK_TIME
         ): TimeSelector(),
         vol.Optional(CONF_APP_IDENTITIES, default=[]): TextSelector(
-            TextSelectorConfig(multiple=True)
+            TextSelectorConfig(type=TextSelectorType.PASSWORD, multiple=True)
         ),
     }
 )

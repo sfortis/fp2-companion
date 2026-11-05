@@ -165,7 +165,10 @@ async def test_the_appdaemon_state_is_copied_once(
         assert json.load(fh) == {"phone_id": "kept"}
     assert os.path.isfile(os.path.join(
         state, "backups", "lumi1.54ef44a1b2c3", "zones.json"))
-    assert (old / "session.json").exists()
+    assert os.path.isfile(os.path.join(state, "copied_from_appdaemon"))
+    # The old token is not left behind; the backups are.
+    assert not (old / "session.json").exists()
+    assert (old / "backups" / "lumi1.54ef44a1b2c3" / "zones.json").exists()
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -205,4 +208,87 @@ async def test_it_waits_while_the_appdaemon_app_is_installed(
 async def test_unload_stops_the_worker(hass, mqtt, entry) -> None:
     worker = entry.runtime_data._worker
     assert await hass.config_entries.async_unload(entry.entry_id)
+    assert worker._shutdown
+
+
+async def test_a_session_made_before_the_integration_is_not_overwritten(
+        hass, mqtt, fp2_device, tmp_path, monkeypatch) -> None:
+    """`login.py` may have written session.json already; the copy then still
+    brings the backups, and the newer session stays."""
+    old = tmp_path / "appdaemon_state"
+    (old / "backups" / "lumi1.54ef44a1b2c3").mkdir(parents=True)
+    (old / "session.json").write_text(json.dumps({"phone_id": "old"}))
+    (old / "backups" / "lumi1.54ef44a1b2c3" / "zones.json").write_text("[]")
+    monkeypatch.setattr(integration, "APPDAEMON_STATE_DIR", str(old))
+    state = hass.config.path(".storage", "fp2_companion")
+
+    def make_new():
+        os.makedirs(state)
+        with open(os.path.join(state, "session.json"), "w") as fh:
+            json.dump({"phone_id": "new"}, fh)
+
+    await hass.async_add_executor_job(make_new)
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    with open(os.path.join(state, "session.json")) as fh:
+        assert json.load(fh) == {"phone_id": "new"}
+    assert os.path.isfile(os.path.join(
+        state, "backups", "lumi1.54ef44a1b2c3", "zones.json"))
+    assert os.path.isfile(os.path.join(state, "copied_from_appdaemon"))
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_retained_command_is_ignored(hass, mqtt, entry) -> None:
+    app = entry.runtime_data
+    seen = []
+    app._submit = lambda func, *args: seen.append(args)
+    async_fire_mqtt_message(
+        hass, "fp2companion/54ef44a1b2c3/cmd/refresh", "", retain=True)
+    await hass.async_block_till_done()
+    assert seen == []
+
+
+async def test_removing_the_entry_removes_the_repair(
+        hass, mqtt, fp2_device) -> None:
+    old_app = hass.config.path("appdaemon", "apps", "fp2-companion")
+    await hass.async_add_executor_job(
+        lambda: os.makedirs(old_app, exist_ok=True))
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "appdaemon_app_installed")
+    await hass.config_entries.async_remove(entry.entry_id)
+    assert not ir.async_get(hass).async_get_issue(
+        DOMAIN, "appdaemon_app_installed")
+
+
+async def test_a_failed_start_leaves_nothing_subscribed(
+        hass, mqtt, fp2_device, monkeypatch) -> None:
+    from custom_components.fp2_companion.runtime import HassFp2Companion
+
+    stopped = []
+    real_stop = HassFp2Companion.async_stop
+
+    def boom(self):
+        raise RuntimeError("no start")
+
+    async def stop(self):
+        stopped.append(True)
+        await real_stop(self)
+
+    monkeypatch.setattr(HassFp2Companion, "initialize", boom)
+    monkeypatch.setattr(HassFp2Companion, "async_stop", stop)
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert stopped == [True]
+
+
+async def test_home_assistant_stopping_stops_the_app(hass, mqtt, entry) -> None:
+    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+    worker = entry.runtime_data._worker
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
     assert worker._shutdown

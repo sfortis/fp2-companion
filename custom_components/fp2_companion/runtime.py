@@ -59,6 +59,7 @@ class HassFp2Companion(Fp2Companion):
         self._timers: dict[int, CALLBACK_TYPE] = {}
         self._unsubscribe: list[CALLBACK_TYPE] = []
         self._stopping = False
+        self._stopped = False
 
     # ---------------------------------------------------------------- lifecycle
     async def async_start(self) -> None:
@@ -67,6 +68,9 @@ class HassFp2Companion(Fp2Companion):
 
     async def async_stop(self) -> None:
         """Stop every subscription and timer, then let the app close."""
+        if self._stopped:
+            return
+        self._stopped = True
         self._stopping = True
         for unsubscribe in self._unsubscribe:
             unsubscribe()
@@ -200,6 +204,10 @@ class HassFp2Companion(Fp2Companion):
     ) -> None:
         @callback
         def received(msg: mqtt.ReceiveMessage) -> None:
+            # A retained command would run again on every start. The card
+            # never retains its commands.
+            if msg.retain:
+                return
             self._submit(func, msg.topic, msg.payload)
 
         for topic in topics:

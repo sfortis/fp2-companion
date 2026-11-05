@@ -23,6 +23,8 @@ STATE_DIR = ".storage/fp2_companion"
 # Where the AppDaemon app kept the same files up to version 1.4.1. The first
 # setup copies them, so nobody signs in again and the backups stay.
 APPDAEMON_STATE_DIR = "/share/appdaemon/fp2_companion"
+# Written in the state folder once that copy has gone through.
+COPIED_MARKER = "copied_from_appdaemon"
 
 # Where the AppDaemon app may be, under the config folder: HACS named the
 # folder after the repository, fp2-companion, and a copy by hand kept the
