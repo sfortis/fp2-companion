@@ -1,6 +1,6 @@
 {
   "domain": "fp2_companion",
-  "name": "FP2 Companion",
+  "name": "Aqara FP2 Companion",
   "after_dependencies": ["homekit_controller"],
   "codeowners": ["@sfortis"],
   "config_flow": true,

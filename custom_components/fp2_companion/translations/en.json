@@ -2,18 +2,18 @@
   "config": {
     "step": {
       "user": {
-        "description": "FP2 Companion finds every Aqara FP2 paired through HomeKit Device by itself. Sign in to Aqara on the FP2 Companion card once it is set up.\n\nIf the AppDaemon app of FP2 Companion is still installed, remove it first: the two must not share the Aqara session."
+        "description": "Aqara FP2 Companion finds every Aqara FP2 paired through HomeKit Device by itself. Sign in to Aqara on the Aqara FP2 Companion card once it is set up.\n\nIf the AppDaemon app of Aqara FP2 Companion is still installed, remove it first: the two must not share the Aqara session."
       }
     },
     "abort": {
-      "mqtt_required": "Set up the MQTT integration first. FP2 Companion publishes its entities and receives the card's commands over MQTT.",
-      "single_instance_allowed": "FP2 Companion is already set up. One entry serves every FP2."
+      "mqtt_required": "Set up the MQTT integration first. Aqara FP2 Companion publishes its entities and receives the card's commands over MQTT.",
+      "single_instance_allowed": "Aqara FP2 Companion is already set up. One entry serves every FP2."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "FP2 Companion settings",
+        "title": "Aqara FP2 Companion settings",
         "description": "FP2s paired through HomeKit are found automatically. Change these only if you need to.",
         "data": {
           "devices": "Add FP2s manually by serial",
@@ -41,8 +41,8 @@
   },
   "issues": {
     "appdaemon_app_installed": {
-      "title": "The AppDaemon app of FP2 Companion is still installed",
-      "description": "FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration would both act on every card command and refresh the same Aqara session, signing each other out. So the integration waits.\n\nFirst stop AppDaemon, or remove the `fp2_companion` entry from its `apps.yaml` and restart it, so that the app is no longer running. Then delete that folder. The old session in `/share/appdaemon/fp2_companion/` is deleted by the integration once it has copied it. The integration then starts by itself, keeps your Aqara session and your zone backups, and this repair goes away."
+      "title": "The AppDaemon app of Aqara FP2 Companion is still installed",
+      "description": "Aqara FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration would both act on every card command and refresh the same Aqara session, signing each other out. So the integration waits.\n\nFirst stop AppDaemon, or remove the `fp2_companion` entry from its `apps.yaml` and restart it, so that the app is no longer running. Then delete that folder. The old session in `/share/appdaemon/fp2_companion/` is deleted by the integration once it has copied it. The integration then starts by itself, keeps your Aqara session and your zone backups, and this repair goes away."
     }
   }
 }

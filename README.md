@@ -1,4 +1,4 @@
-# FP2 Companion for Home Assistant
+# Aqara FP2 Companion
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-companion-41BDF5?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
 [![HACS](https://img.shields.io/badge/HACS-integration-41BDF5)](https://hacs.xyz/)
@@ -7,7 +7,8 @@ A Home Assistant companion for the Aqara FP2 presence sensor. It brings the
 settings that otherwise live only in the Aqara phone app into Home
 Assistant: sensitivity, approach distance, AI person detection, and a full
 zone editor with backups, plus the live targets on the zone map, the way the
-Aqara app shows them.
+Aqara app shows them. It is an unofficial project and is not made by or
+affiliated with Aqara.
 
 The FP2 reports presence to Home Assistant locally over HomeKit, but it has
 no local channel for its settings, which normally means the Aqara phone app.
