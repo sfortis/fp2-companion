@@ -9,6 +9,7 @@ CLAUDE.md
 .claude/
 scripts/deploy.env
 
-# Only the documentation images are tracked.
+# Only the documentation images and the integration's brand icons are tracked.
 *.png
 !docs/images/*.png
+!custom_components/fp2_companion/brand/*.png
