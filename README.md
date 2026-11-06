@@ -84,6 +84,13 @@ since Home Assistant 2026.11) and download it. If the search does not find
 it yet, add `https://github.com/sfortis/fp2-companion` as a custom
 repository of the type **Integration** instead. Restart Home Assistant.
 
+Until the HACS catalog lists it as an integration, HACS installed as a
+custom integration with AppDaemon apps turned on still knows this
+repository as an AppDaemon app. It then refuses the custom repository with
+"Repository exists in the store", so install the integration by hand
+instead. The Marketplace of Home Assistant 2026.11 has no AppDaemon apps and
+accepts the custom repository.
+
 **By hand.** Copy `custom_components/fp2_companion/` into the
 `custom_components` folder of Home Assistant's configuration folder and
 restart Home Assistant.
