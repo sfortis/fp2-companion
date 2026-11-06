@@ -2,12 +2,62 @@
   "config": {
     "step": {
       "user": {
-        "description": "Aqara FP2 Companion finds every Aqara FP2 paired through HomeKit Device by itself. Sign in to Aqara on the Aqara FP2 Companion card once it is set up.\n\nIf the AppDaemon app of Aqara FP2 Companion is still installed, remove it first: the two must not share the Aqara session."
+        "title": "Sign in to Aqara",
+        "description": "Aqara FP2 Companion finds every FP2 paired through HomeKit Device by itself. Sign in with the Aqara account that holds them.\n\nIf the AppDaemon app of Aqara FP2 Companion is still installed, remove it first: the two must not share the Aqara session.",
+        "data": {
+          "account": "Aqara account",
+          "password": "Password",
+          "country": "Country or region",
+          "app_identity": "Custom Aqara app credentials"
+        },
+        "data_description": {
+          "account": "The email or phone number you sign in to the Aqara app with.",
+          "password": "Used once to sign in. Only the session is kept, never the password.",
+          "country": "The one chosen in the Aqara app. It decides which Aqara servers hold the account.",
+          "app_identity": "Only for an account in the China region, as app_id:app_key. Leave empty otherwise."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Aqara again",
+        "description": "Aqara ended the session, so the settings and zones of the FP2s cannot be read or changed. Sign in again.",
+        "data": {
+          "account": "Aqara account",
+          "password": "Password",
+          "country": "Country or region"
+        },
+        "data_description": {
+          "account": "The email or phone number you sign in to the Aqara app with.",
+          "password": "Used once to sign in. Only the session is kept, never the password.",
+          "country": "The one chosen in the Aqara app. It decides which Aqara servers hold the account."
+        }
+      },
+      "reconfigure": {
+        "title": "Change the Aqara account",
+        "description": "Sign in again, with the same account or another one.",
+        "data": {
+          "account": "Aqara account",
+          "password": "Password",
+          "country": "Country or region"
+        },
+        "data_description": {
+          "account": "The email or phone number you sign in to the Aqara app with.",
+          "password": "Used once to sign in. Only the session is kept, never the password.",
+          "country": "The one chosen in the Aqara app. It decides which Aqara servers hold the account."
+        }
       }
     },
+    "error": {
+      "invalid_auth": "Aqara refused the account or the password.",
+      "cannot_connect": "The Aqara servers could not be reached.",
+      "invalid_identity_region": "This region needs custom app credentials. Add them in the first form, or in the options for a sign-in again.",
+      "invalid_identity": "Use the format app_id:app_key.",
+      "unknown": "Something went wrong. The log has the details.",
+      "refused": "Aqara refused the sign-in (code {code}): {message}"
+    },
     "abort": {
-      "mqtt_required": "Set up the MQTT integration first. Aqara FP2 Companion publishes its entities and receives the card's commands over MQTT.",
-      "single_instance_allowed": "Aqara FP2 Companion is already set up. One entry serves every FP2."
+      "single_instance_allowed": "Aqara FP2 Companion is already set up. One entry serves every FP2.",
+      "reauth_successful": "Signed in again.",
+      "reconfigure_successful": "Signed in with the new account."
     }
   },
   "options": {
@@ -43,6 +93,61 @@
     "appdaemon_app_installed": {
       "title": "The AppDaemon app of Aqara FP2 Companion is still installed",
       "description": "Aqara FP2 Companion now runs as an integration, and the AppDaemon app is still in `{path}`. If AppDaemon runs it, the app and the integration would both act on every card command and refresh the same Aqara session, signing each other out. So the integration waits.\n\nFirst stop AppDaemon, or remove the `fp2_companion` entry from its `apps.yaml` and restart it, so that the app is no longer running. Then delete that folder. The old session in `/share/appdaemon/fp2_companion/` is deleted by the integration once it has copied it. The integration then starts by itself, keeps your Aqara session and your zone backups, and this repair goes away."
+    }
+  },
+  "entity": {
+    "select": {
+      "sensitivity": {
+        "name": "Sensitivity"
+      },
+      "approach_distance": {
+        "name": "Approach distance"
+      },
+      "zone_sensitivity": {
+        "name": "{zone} sensitivity"
+      }
+    },
+    "switch": {
+      "ai_detection": {
+        "name": "AI person detection"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Refresh"
+      },
+      "ai_learning": {
+        "name": "AI learning"
+      }
+    },
+    "sensor": {
+      "zones": {
+        "name": "Zones"
+      },
+      "cloud_status": {
+        "name": "Cloud status",
+        "state": {
+          "starting": "Starting",
+          "ok": "OK",
+          "not_on_account": "Not on the account",
+          "no_session": "Not signed in",
+          "cloud_error": "Cloud error",
+          "write_not_applied": "Write not applied",
+          "zone_write_failed": "Zone write failed",
+          "refused": "Refused"
+        }
+      },
+      "devices": {
+        "name": "Devices"
+      }
+    }
+  },
+  "exceptions": {
+    "no_session": {
+      "message": "Not signed in to Aqara. Sign in again to start Aqara FP2 Companion."
+    },
+    "appdaemon_app_installed": {
+      "message": "The AppDaemon app of Aqara FP2 Companion is still in {path}. Remove it first."
     }
   }
 }

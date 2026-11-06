@@ -2,15 +2,16 @@
 
 `Fp2Companion` is blocking code written for one worker thread, the way
 AppDaemon ran it. `HassFp2Companion` gives it that thread, an executor of its
-own with one worker, and provides what AppDaemon provided: the log, timers,
-MQTT and the devices Home Assistant knows. The app calls these methods from
-its worker thread and from the live tracker's threads, never from the event
-loop, so each of them hands its work to the loop in a thread-safe way.
+own with one worker, and provides the log, timers, the devices Home Assistant
+knows, and the signals that update the entities and the card's live view.
+The app calls these methods from its worker thread and from the live
+tracker's threads, never from the event loop, so each of them hands its work
+to the loop in a thread-safe way. The entities and the card's commands go the
+other way, through `submit`, which queues a call for the worker.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -18,17 +19,17 @@ import itertools
 import logging
 from typing import Any
 
-from homeassistant.components import mqtt
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_time_change,
 )
 from homeassistant.util.async_ import run_callback_threadsafe
 
-from .companion import Fp2Companion
+from .aqara_cloud import did_from_serial
+from .companion import Fp2Companion, parse_discovery
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -41,23 +42,34 @@ LEVELS = {
 
 HOMEKIT_DOMAIN = "homekit_controller"
 
-# How long the worker waits for the event loop to read the registries or
-# subscribe. The loop answers in milliseconds; this only bounds a stall.
+# How long the worker waits for the event loop to read the registries. The
+# loop answers in milliseconds; this only bounds a stall.
 LOOP_TIMEOUT = 30
+# How long after HomeKit Device adds an FP2 the app looks for it, so the
+# several registry updates of one pairing make one rescan.
+RESCAN_DELAY = 10
+
+LiveListener = Callable[[dict[str, Any]], None]
 
 
 class HassFp2Companion(Fp2Companion):
     """The app, running inside Home Assistant."""
 
-    def __init__(self, hass: HomeAssistant, args: dict[str, Any]) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry_id: str, args: dict[str, Any]
+    ) -> None:
         """Set up the runtime; `async_start` starts the app."""
         self.hass = hass
+        self.entry_id = entry_id
         self.args = args
+        # The card's live views, per device key (websocket subscriptions).
+        self._live_listeners: dict[str, set[LiveListener]] = {}
         # One worker, so the app's callbacks run one at a time, in order.
         self._worker = ThreadPoolExecutor(1, thread_name_prefix="fp2_companion")
         self._handles = itertools.count(1)
         self._timers: dict[int, CALLBACK_TYPE] = {}
-        self._unsubscribe: list[CALLBACK_TYPE] = []
+        self._unlisten: CALLBACK_TYPE | None = None
+        self._rescan: CALLBACK_TYPE | None = None
         self._stopping = False
         self._stopped = False
 
@@ -65,16 +77,59 @@ class HassFp2Companion(Fp2Companion):
     async def async_start(self) -> None:
         """Run `initialize` on the worker. An error fails the setup."""
         await self.hass.loop.run_in_executor(self._worker, self.initialize)
+        self._unlisten = self.hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._device_registry_updated
+        )
+
+    @callback
+    def _device_registry_updated(self, event: Event[dr.EventDeviceRegistryUpdatedData]) -> None:
+        """An FP2 that HomeKit Device adds after setup is served without a
+        reload: the app looks for devices again shortly after."""
+        if event.data["action"] not in ("create", "update") or self._stopping:
+            return
+        device = dr.async_get(self.hass).async_get(event.data["device_id"])
+        if device is None or not (
+            isinstance(device.model, str) and device.model.startswith("PS-")
+        ):
+            return
+        if not self._is_homekit(device):
+            return
+        # Only an FP2 model, and not one excluded in the options.
+        row = {"serial": device.serial_number, "model": device.model,
+               "original": device.name, "name": device.name}
+        if not parse_discovery([row], (), self._exclude):
+            return
+        did = did_from_serial(device.serial_number)
+        if any(d.info["did"] == did for d in list(self.devices.values())):
+            return
+        if self._rescan is None:
+
+            @callback
+            def fire(_now: datetime) -> None:
+                self._rescan = None
+                self.submit(self.rescan)
+
+            self._rescan = async_call_later(self.hass, RESCAN_DELAY, fire)
+
+    @callback
+    def _is_homekit(self, device: dr.DeviceEntry) -> bool:
+        homekit = {
+            e.entry_id for e in self.hass.config_entries.async_entries(HOMEKIT_DOMAIN)
+        }
+        if hasattr(device, "config_entry_id"):
+            return device.config_entry_id in homekit
+        return bool(set(device.config_entries) & homekit)
 
     async def async_stop(self) -> None:
-        """Stop every subscription and timer, then let the app close."""
+        """Stop every timer, then let the app close."""
         if self._stopped:
             return
         self._stopped = True
         self._stopping = True
-        for unsubscribe in self._unsubscribe:
-            unsubscribe()
-        self._unsubscribe.clear()
+        for cancel_listener in (self._unlisten, self._rescan):
+            if cancel_listener is not None:
+                cancel_listener()
+        self._unlisten = self._rescan = None
         for cancel in self._timers.values():
             cancel()
         self._timers.clear()
@@ -83,6 +138,17 @@ class HassFp2Companion(Fp2Companion):
         )
         # Waits for the worker thread to end, on one of Home Assistant's.
         await self.hass.async_add_executor_job(self._worker.shutdown)
+
+    async def async_call_locked(self, func: Callable[..., Any], *args: Any) -> Any:
+        """Run `func(*args)` on the worker under the cloud lock and return
+        what it returns. A sign-in from the config flow goes through here, so
+        it cannot interleave with the app's own token refresh."""
+
+        def locked() -> Any:
+            with self.lock:
+                return func(*args)
+
+        return await self.hass.loop.run_in_executor(self._worker, locked)
 
     def _guarded(self, func: Callable[..., Any], args: tuple[Any, ...]) -> None:
         """One callback of the app. An error is logged, as AppDaemon did,
@@ -93,8 +159,8 @@ class HassFp2Companion(Fp2Companion):
             _LOGGER.exception("Error in %s", getattr(func, "__qualname__", repr(func)))
 
     @callback
-    def _submit(self, func: Callable[..., Any], *args: Any) -> None:
-        """Queue a callback of the app for the worker, from the event loop."""
+    def submit(self, func: Callable[..., Any], *args: Any) -> None:
+        """Queue a call of the app for the worker, from the event loop."""
         if not self._stopping:
             self._worker.submit(self._guarded, func, args)
 
@@ -126,7 +192,7 @@ class HassFp2Companion(Fp2Companion):
         @callback
         def fire(_now: datetime) -> None:
             self._timers.pop(handle, None)
-            self._submit(func, dict(kwargs))
+            self.submit(func, dict(kwargs))
 
         self._timers[handle] = async_call_later(self.hass, delay, fire)
 
@@ -153,7 +219,7 @@ class HassFp2Companion(Fp2Companion):
 
         @callback
         def fire(_now: datetime) -> None:
-            self._submit(func, {})
+            self.submit(func, {})
 
         self._timers[handle] = async_track_time_change(
             self.hass, fire, hour=hour, minute=minute, second=second
@@ -172,48 +238,46 @@ class HassFp2Companion(Fp2Companion):
         elif not silent:
             _LOGGER.warning("No timer %s to cancel", handle)
 
-    # ------------------------------------------------------------------- MQTT
-    def publish(
-        self, topic: str, payload: str, retain: bool = False, qos: int = 0
-    ) -> None:
-        """Publish through Home Assistant's MQTT client. The messages go out
-        in the order they are published in: every one is its own task, and
-        each task hands its message to the client before it first waits."""
-        self.hass.create_task(
-            self._async_publish(topic, payload, qos, retain),
-            f"{__package__} publish {topic}",
-        )
+    # ---------------------------------------------------------------- signals
+    def added(self, device: Any) -> None:
+        """A device is served for the first time: its entities are added."""
+        dispatcher_send(self.hass, signal_added(self.entry_id), device)
 
-    async def _async_publish(
-        self, topic: str, payload: str, qos: int, retain: bool
-    ) -> None:
-        try:
-            await mqtt.async_publish(self.hass, topic, payload, qos, retain)
-        except HomeAssistantError as exc:
-            _LOGGER.warning("Could not publish to %s: %s", topic, exc)
+    def changed(self, key: str | None) -> None:
+        """A device's state changed, or the app's own when `key` is None."""
+        dispatcher_send(self.hass, signal_changed(self.entry_id, key))
 
-    def subscribe(self, topics: list[str], func: Callable[[str, str], Any]) -> None:
-        """Call `func(topic, payload)` on the worker for every message on
-        `topics`. Returns once Home Assistant has subscribed."""
-        asyncio.run_coroutine_threadsafe(
-            self._async_subscribe(topics, func), self.hass.loop
-        ).result(LOOP_TIMEOUT)
+    def signed_out(self) -> None:
+        """The Aqara session is gone: Home Assistant asks for a sign-in."""
+        self.hass.loop.call_soon_threadsafe(self._start_reauth)
 
-    async def _async_subscribe(
-        self, topics: list[str], func: Callable[[str, str], Any]
-    ) -> None:
+    @callback
+    def _start_reauth(self) -> None:
+        if self._stopping:
+            return
+        entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        if entry is not None:
+            entry.async_start_reauth(self.hass)
+
+    def live(self, key: str, message: dict[str, Any]) -> None:
+        """One live position message, for the cards watching `key`."""
+        self.hass.loop.call_soon_threadsafe(self._deliver_live, key, message)
+
+    @callback
+    def _deliver_live(self, key: str, message: dict[str, Any]) -> None:
+        for listener in list(self._live_listeners.get(key, ())):
+            listener(message)
+
+    @callback
+    def async_listen_live(self, key: str, listener: LiveListener) -> CALLBACK_TYPE:
+        """Call `listener(message)` for every live message of `key`."""
+        self._live_listeners.setdefault(key, set()).add(listener)
+
         @callback
-        def received(msg: mqtt.ReceiveMessage) -> None:
-            # A retained command would run again on every start. The card
-            # never retains its commands.
-            if msg.retain:
-                return
-            self._submit(func, msg.topic, msg.payload)
+        def remove() -> None:
+            self._live_listeners.get(key, set()).discard(listener)
 
-        for topic in topics:
-            self._unsubscribe.append(
-                await mqtt.async_subscribe(self.hass, topic, received)
-            )
+        return remove
 
     # -------------------------------------------------------------- discovery
     def find_devices(self) -> list[dict[str, Any]]:
@@ -245,3 +309,13 @@ class HassFp2Companion(Fp2Companion):
                     "area": area.name if area else None,
                 }
         return list(rows.values())
+
+
+def signal_added(entry_id: str) -> str:
+    """The signal that carries a newly served device."""
+    return f"fp2_companion_{entry_id}_added"
+
+
+def signal_changed(entry_id: str, key: str | None) -> str:
+    """The signal after a device's state, or the app's (`key` None), changed."""
+    return f"fp2_companion_{entry_id}_changed_{key or 'app'}"

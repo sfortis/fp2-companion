@@ -1,29 +1,37 @@
 """Config flow for FP2 Companion.
 
-There is nothing to ask at setup: the FP2s are found in Home Assistant and
-the Aqara sign-in happens on the card (decision 15). The options are what the
-AppDaemon app's yaml held.
+The FP2s are found in Home Assistant, so setup asks only for the Aqara
+account, signs in with it and keeps the session, not the password (decision
+28). Reauthentication runs when Aqara drops the session, and Reconfigure
+changes the account. The options are what the AppDaemon app's yaml held.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import logging
 from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import mqtt
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
+from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -31,8 +39,12 @@ from homeassistant.helpers.selector import (
 )
 
 from .aqara_cloud import did_from_serial
+from .auth import SignInFailed, parse_identities, sign_in
 from .const import (
+    CONF_ACCOUNT,
     CONF_APP_IDENTITIES,
+    CONF_APP_IDENTITY,
+    CONF_COUNTRY,
     CONF_BACKUPS_KEEP,
     CONF_CLEAR_APP_IDENTITIES,
     CONF_DEVICES,
@@ -41,7 +53,13 @@ from .const import (
     DEFAULT_BACKUPS_KEEP,
     DEFAULT_TOKEN_CHECK_TIME,
     DOMAIN,
+    STATE_DIR,
 )
+from .regions import COUNTRIES
+
+_LOGGER = logging.getLogger(__name__)
+
+TITLE = "Aqara FP2 Companion"
 
 OPTIONS_SCHEMA = vol.Schema(
     {
@@ -65,26 +83,194 @@ OPTIONS_SCHEMA = vol.Schema(
 )
 
 
+def _sign_in_schema(with_identity: bool) -> vol.Schema:
+    """Account, password and country; the first form also takes an app
+    identity pair, for a China region account."""
+    fields: dict[Any, Any] = {
+        # An Aqara account is an email or a phone number, so plain text.
+        vol.Required(CONF_ACCOUNT): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username")
+        ),
+        vol.Required(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD, autocomplete="current-password"
+            )
+        ),
+        vol.Required(CONF_COUNTRY): SelectSelector(
+            SelectSelectorConfig(
+                options=[
+                    SelectOptionDict(value=code, label=name)
+                    for code, name, _area in COUNTRIES
+                ],
+                mode=SelectSelectorMode.DROPDOWN,
+                sort=False,
+            )
+        ),
+    }
+    if with_identity:
+        fields[vol.Optional(CONF_APP_IDENTITY)] = TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
+    return vol.Schema(fields)
+
+
 class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Add FP2 Companion. The manifest allows one entry."""
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Start with no Aqara answer to show."""
+        self._placeholders = {"code": "", "message": ""}
+
+    async def _async_sign_in(
+        self,
+        user_input: dict[str, Any],
+        identities: list[list[str]],
+        entry: ConfigEntry | None = None,
+    ) -> dict[str, str]:
+        """Sign in with what the form holds; the errors for the form. While
+        the entry runs, the sign-in goes through its app, under the lock its
+        own token refresh takes."""
+        args = (
+            self.hass.config.path(STATE_DIR),
+            user_input[CONF_ACCOUNT],
+            user_input[CONF_PASSWORD],
+            user_input[CONF_COUNTRY],
+            identities,
+        )
+        try:
+            if entry is not None and entry.state is ConfigEntryState.LOADED:
+                await entry.runtime_data.async_call_locked(sign_in, *args)
+            else:
+                await self.hass.async_add_executor_job(sign_in, *args)
+        except SignInFailed as exc:
+            self._placeholders = {
+                "code": "" if exc.code is None else str(exc.code),
+                "message": exc.message,
+            }
+            return {"base": exc.reason.value}
+        except Exception:
+            _LOGGER.exception("Unexpected error while signing in to Aqara")
+            return {"base": "unknown"}
+        return {}
+
+    def _defaults(self, entry: ConfigEntry | None = None) -> dict[str, Any]:
+        """The account and country to suggest: the entry's, or the country
+        Home Assistant is set to."""
+        codes = {code for code, _name, _area in COUNTRIES}
+        country = (entry.data.get(CONF_COUNTRY) if entry else None) or (
+            self.hass.config.country if self.hass.config.country in codes else None
+        )
+        out: dict[str, Any] = {}
+        if entry and entry.data.get(CONF_ACCOUNT):
+            out[CONF_ACCOUNT] = entry.data[CONF_ACCOUNT]
+        if country:
+            out[CONF_COUNTRY] = country
+        return out
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm, once MQTT is set up."""
-        if not self.hass.config_entries.async_entries(mqtt.DOMAIN):
-            return self.async_abort(reason="mqtt_required")
+        """Sign in to Aqara."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="Aqara FP2 Companion", data={})
-        return self.async_show_form(step_id="user")
+            identity = str(user_input.get(CONF_APP_IDENTITY) or "").strip()
+            identities = parse_identities([identity]) if identity else []
+            if identity and not identities:
+                errors[CONF_APP_IDENTITY] = "invalid_identity"
+            else:
+                errors = await self._async_sign_in(user_input, identities)
+            if not errors:
+                return self.async_create_entry(
+                    title=TITLE,
+                    data=_account_data(user_input),
+                    options={CONF_APP_IDENTITIES: [identity]} if identity else {},
+                )
+        return self.async_show_form(
+            step_id="user",
+            data_schema=self.add_suggested_values_to_schema(
+                _sign_in_schema(with_identity=True),
+                _without_password(user_input) or self._defaults(),
+            ),
+            errors=errors,
+            description_placeholders=self._placeholders,
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Aqara dropped the session."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Sign in again."""
+        return await self._async_sign_in_again(
+            "reauth_confirm", self._get_reauth_entry(), user_input
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Sign in again, with this account or another."""
+        return await self._async_sign_in_again(
+            "reconfigure", self._get_reconfigure_entry(), user_input
+        )
+
+    async def _async_sign_in_again(
+        self, step_id: str, entry: ConfigEntry, user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            identities = parse_identities(entry.options.get(CONF_APP_IDENTITIES, []))
+            errors = await self._async_sign_in(user_input, identities, entry)
+            if not errors:
+                # A loaded entry's update listener reloads it when the data
+                # changes. The same account signed in again changes nothing,
+                # and an entry whose setup failed has no listener, so in both
+                # cases the reload is asked for here.
+                loaded = entry.state is ConfigEntryState.LOADED
+                changed = self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, **_account_data(user_input)}
+                )
+                if not changed or not loaded:
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                return self.async_abort(
+                    reason="reauth_successful"
+                    if step_id == "reauth_confirm"
+                    else "reconfigure_successful"
+                )
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                _sign_in_schema(with_identity=False),
+                _without_password(user_input) or self._defaults(entry),
+            ),
+            errors=errors,
+            description_placeholders=self._placeholders,
+        )
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """The options flow."""
         return Fp2CompanionOptionsFlow()
+
+
+def _account_data(user_input: dict[str, Any]) -> dict[str, Any]:
+    """What the entry keeps of a sign-in: never the password."""
+    return {
+        CONF_ACCOUNT: str(user_input[CONF_ACCOUNT]).strip(),
+        CONF_COUNTRY: user_input[CONF_COUNTRY],
+    }
+
+
+def _without_password(user_input: dict[str, Any] | None) -> dict[str, Any]:
+    """A rejected form shows again with what was typed, but not the
+    password."""
+    return {k: v for k, v in (user_input or {}).items() if k != CONF_PASSWORD}
 
 
 class Fp2CompanionOptionsFlow(OptionsFlow):

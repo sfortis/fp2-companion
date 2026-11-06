@@ -8,16 +8,29 @@ CONF_EXCLUDE = "exclude"
 CONF_BACKUPS_KEEP = "backups_keep"
 CONF_TOKEN_CHECK_TIME = "token_check_time"
 CONF_APP_IDENTITIES = "app_identities"
+# The Aqara account, in the entry's data; the password is never stored.
+CONF_ACCOUNT = "account"
+CONF_COUNTRY = "country"
+# Only in the first form: an app identity pair for a China region account,
+# which goes to the options.
+CONF_APP_IDENTITY = "app_identity"
 # Only in the options form: empties the stored pairs, and is not stored.
 CONF_CLEAR_APP_IDENTITIES = "clear_app_identities"
 
 DEFAULT_BACKUPS_KEEP = 50
 DEFAULT_TOKEN_CHECK_TIME = "04:10:00"
 
-# The card publishes its commands under this prefix, so it is not an option.
-BASE_TOPIC = "fp2companion"
+# The MQTT topic prefix of versions up to 1.4.x, whose entities were MQTT
+# discovery entities. Only the migration to native entities (migrate.py)
+# still uses it, to clear what those versions left retained on the broker.
+LEGACY_BASE_TOPIC = "fp2companion"
+# Every unique id this integration has used starts with this.
+UNIQUE_ID_PREFIX = "fp2_companion_"
+# The app's own sensor, which the card reads by this entity id.
+HUB_UNIQUE_ID = "fp2_companion_devices"
+HUB_ENTITY_ID = "sensor.fp2_companion_devices"
 
-# The session, the backups and the published zone selects, under the config
+# The session and the backups, under the config
 # folder. The session holds the Aqara token, so it sits with Home Assistant's
 # own credentials in .storage, which every backup includes (decision 26).
 STATE_DIR = ".storage/fp2_companion"
@@ -31,6 +44,6 @@ COPIED_MARKER = "copied_from_appdaemon"
 # Where the AppDaemon app may be, under the config folder: HACS named the
 # folder after the repository, fp2-companion, and a copy by hand kept the
 # repository's apps/fp2_companion. While one is there, the integration does
-# not start: the app may be running on the same session and the same topics.
+# not start: the app may be running on the same session.
 APPDAEMON_APP_DIRS = ("appdaemon/apps/fp2-companion", "appdaemon/apps/fp2_companion")
 ISSUE_APPDAEMON_APP = "appdaemon_app_installed"

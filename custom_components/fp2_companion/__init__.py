@@ -1,9 +1,9 @@
 """FP2 Companion: every Aqara FP2's settings and zones in Home Assistant.
 
 The integration starts the app (`companion.py`) on a runtime of Home
-Assistant's (`runtime.py`). Its entities are MQTT discovery entities, as they
-were under AppDaemon, so entity ids, the card and its commands are unchanged
-(decision 26).
+Assistant's (`runtime.py`, decision 26). Its entities are native and keep the
+entity ids of the MQTT discovery entities of versions up to 1.4.x, which the
+first setup moves over (`migrate.py`, decision 27).
 """
 
 from __future__ import annotations
@@ -13,17 +13,20 @@ import os
 import shutil
 from typing import Any
 
-from homeassistant.components import mqtt
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    issue_registry as ir,
+)
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     APPDAEMON_APP_DIRS,
     APPDAEMON_STATE_DIR,
-    BASE_TOPIC,
     CONF_APP_IDENTITIES,
     CONF_BACKUPS_KEEP,
     CONF_DEVICES,
@@ -36,9 +39,22 @@ from .const import (
     ISSUE_APPDAEMON_APP,
     STATE_DIR,
 )
+from .auth import has_session, parse_identities, sign_out
+from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
+from .websocket_api import async_setup as async_setup_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = [Platform.BUTTON, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the card's websocket commands."""
+    async_setup_websocket_api(hass)
+    return True
 
 type Fp2CompanionConfigEntry = ConfigEntry[HassFp2Companion]
 
@@ -47,8 +63,6 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> bool:
     """Start the app."""
-    if not await mqtt.async_wait_for_mqtt_client(hass):
-        raise ConfigEntryNotReady("MQTT is not available")
     # While the AppDaemon app is installed it may be running: both would act
     # on every card command and refresh one session, signing each other out.
     # So the integration waits, and Home Assistant retries the setup until
@@ -65,21 +79,30 @@ async def async_setup_entry(
             translation_placeholders={"path": old_app},
         )
         raise ConfigEntryNotReady(
-            f"The AppDaemon app of FP2 Companion is still in {old_app}"
+            translation_domain=DOMAIN,
+            translation_key="appdaemon_app_installed",
+            translation_placeholders={"path": old_app},
         )
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
     state_dir = hass.config.path(STATE_DIR)
     await hass.async_add_executor_job(_prepare_state, state_dir)
+    await async_migrate_mqtt_entities(hass, entry)
+    # Without a session nothing can be read: Home Assistant asks for a
+    # sign-in (the reauth flow) instead of starting an app that cannot work.
+    if not await hass.async_add_executor_job(has_session, state_dir):
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="no_session"
+        )
 
-    app = HassFp2Companion(hass, _app_args(hass, entry, state_dir))
+    app = HassFp2Companion(hass, entry.entry_id, _app_args(hass, entry, state_dir))
+    entry.runtime_data = app
     try:
         await app.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
-        # Whatever the app subscribed to before it failed must not stay
-        # behind, or a reload would run every command twice.
+        # The app's worker and timers must not stay behind a failed setup.
         await app.async_stop()
         raise
-    entry.runtime_data = app
 
     async def _async_stop_app(_event: Event) -> None:
         # Home Assistant does not unload entries when it shuts down.
@@ -95,7 +118,9 @@ async def async_setup_entry(
 async def async_unload_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> bool:
-    """Stop the app."""
+    """Remove the entities, then stop the app."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     await entry.runtime_data.async_stop()
     return True
 
@@ -103,8 +128,27 @@ async def async_unload_entry(
 async def async_remove_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> None:
-    """Take the repair with the entry."""
+    """Take the repair with the entry, and forget the Aqara token, so the
+    config folder and the backups taken from now on hold none."""
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
+    try:
+        await hass.async_add_executor_job(sign_out, hass.config.path(STATE_DIR))
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning("Could not clear the Aqara session: %s", exc)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: Fp2CompanionConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """A person may remove the settings device of an FP2 this integration
+    has not served since it last started (gone from HomeKit Device, or
+    excluded in the options), but not one it serves or its own."""
+    app = getattr(entry, "runtime_data", None)
+    if app is None or entry.state is not ConfigEntryState.LOADED:
+        return False
+    served = {d.info["did"] for d in list(app.devices.values())}
+    ids = {ident for domain, ident in device.identifiers if domain == DOMAIN}
+    return bool(ids) and entry.entry_id not in ids and not ids & served
 
 
 async def _async_options_updated(
@@ -133,6 +177,9 @@ def _prepare_state(state_dir: str) -> None:
     token would stay valid for weeks, as the refresh happens only three days
     before it expires, and it is the same session."""
     os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    # A folder made by an earlier version, or by the first sign-in, may be
+    # readable by others; it holds the session and the zone backups.
+    os.chmod(state_dir, 0o700)
     marker = os.path.join(state_dir, COPIED_MARKER)
     if os.path.exists(marker) or not os.path.isfile(
         os.path.join(APPDAEMON_STATE_DIR, "session.json")
@@ -179,8 +226,6 @@ def _app_args(
     options = entry.options
     return {
         "state_dir": state_dir,
-        "base_topic": BASE_TOPIC,
-        "discovery_prefix": _discovery_prefix(hass),
         "devices": list(options.get(CONF_DEVICES, [])),
         "exclude": list(options.get(CONF_EXCLUDE, [])),
         "backups_keep": int(options.get(CONF_BACKUPS_KEEP, DEFAULT_BACKUPS_KEEP)),
@@ -190,22 +235,3 @@ def _app_args(
         "app_identities": parse_identities(options.get(CONF_APP_IDENTITIES, [])),
         "card_dir": hass.config.path("www", "fp2-companion"),
     }
-
-
-def parse_identities(values: list[str]) -> list[list[str]]:
-    """`app_id:app_key` per entry, as [app_id, app_key] pairs."""
-    pairs = []
-    for value in values:
-        app_id, sep, app_key = str(value).strip().partition(":")
-        if sep and app_id.strip() and app_key.strip():
-            pairs.append([app_id.strip(), app_key.strip()])
-    return pairs
-
-
-def _discovery_prefix(hass: HomeAssistant) -> str:
-    """The MQTT integration's discovery prefix, so the entities appear even
-    where it is not the default."""
-    for entry in hass.config_entries.async_entries(mqtt.DOMAIN):
-        conf = {**entry.data, **entry.options}
-        return str(conf.get(mqtt.CONF_DISCOVERY_PREFIX, "homeassistant"))
-    return "homeassistant"

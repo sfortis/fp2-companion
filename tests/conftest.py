@@ -1,9 +1,9 @@
 """Test harness for the fp2_companion app.
 
 Imports the package without Home Assistant, and provides `World`, a fake
-runtime that records what the app publishes, its timers and its
-subscriptions. MQTT is the app's only output, so the tests read what it
-published back off the recorded calls.
+runtime that records the devices the app announces, the changes it signals,
+its live messages and its timers. The tests read the state itself off the
+app's objects, as the entities do.
 """
 import importlib.util
 import sys
@@ -36,17 +36,26 @@ def _load(module_name):
 
 
 class World:
-    """The runtime's side, in memory: recorded publishes, timers and
-    subscriptions."""
+    """The runtime's side, in memory: recorded signals, logs and timers."""
 
     def __init__(self):
-        self.calls = []      # ("mqtt/publish", None, data)
+        self.added = []      # device keys, in the order they were announced
+        self.changes = []    # device keys that changed; None for the app
+        self.live = []       # (device key, message)
+        self.signed_out = 0  # how often the app said the session is gone
         self.logs = []
 
-    def publish(self, topic, payload, retain=False, qos=0):
-        self.calls.append(("mqtt/publish", None,
-                           {"topic": topic, "payload": payload,
-                            "retain": retain, "qos": qos}))
+    def added_device(self, device):
+        self.added.append(device.key)
+
+    def changed(self, key):
+        self.changes.append(key)
+
+    def live_message(self, key, message):
+        self.live.append((key, message))
+
+    def session_gone(self):
+        self.signed_out += 1
 
     def log(self, *a, **k):
         self.logs.append(" ".join(str(x) for x in a))
@@ -72,21 +81,10 @@ class World:
                             "delay": delay})
         return handle
 
-    def subscribe(self, topics, callback):
-        self.subscriptions = getattr(self, "subscriptions", [])
-        self.subscriptions.append({"topics": list(topics),
-                                   "callback": callback})
-
 
 def _bind(app, world):
-    for name in ("publish", "log", "run_in", "run_daily", "cancel_timer",
-                 "subscribe"):
+    for name in ("log", "run_in", "run_daily", "cancel_timer", "changed"):
         setattr(app, name, getattr(world, name))
-
-
-def mqtt_payload(world, topic):
-    """The last payload published to `topic`, or None."""
-    for service, _entity, data in reversed(world.calls):
-        if service == "mqtt/publish" and data.get("topic") == topic:
-            return data.get("payload")
-    return None
+    app.added = world.added_device
+    app.live = world.live_message
+    app.signed_out = world.session_gone

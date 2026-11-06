@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import secrets
+import tempfile
 import time
 import uuid
 from urllib.error import HTTPError
@@ -46,6 +47,8 @@ CODE_TOKEN_EXPIRED = 108
 # The answer to a request signed with an app identity this region does not
 # accept. A sign-in then tries the next configured pair.
 CODE_INVALID_SIGN = 106
+# A sign-in to an account that does not exist (docs/PROTOCOL.md).
+CODE_ACCOUNT_UNKNOWN = 810
 
 # Refresh this long before the token expires. A token lives about 30 days.
 REFRESH_MARGIN_SECONDS = 3 * 86400
@@ -214,16 +217,24 @@ class SessionStore:
             return None
 
     def save(self, session):
+        # The folder holds the session and the zone backups, so it is the
+        # owner's alone, and every writer gets a temporary file of its own.
         folder = os.path.dirname(self.path) or "."
-        os.makedirs(folder, exist_ok=True)
-        tmp = f"{self.path}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(session, fh, indent=1)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".session-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(session, fh, indent=1)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self.path)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
 
 # --------------------------------------------------------------- the client

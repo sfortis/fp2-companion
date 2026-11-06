@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from conftest import World, _bind, _load, mqtt_payload
+from conftest import World, _bind, _load
 
 from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
                                                          AqaraError,
@@ -18,8 +18,6 @@ from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
 DID = "lumi1.54ef44a1b2c3"
 KEY = "54ef44a1b2c3"
 PREFIX = "presence_sensor_fp2_b2c3"
-OBJ = "fp2_companion_lumi1_54ef44a1b2c3"
-T = f"fp2companion/{KEY}"
 
 # What the discovery template returned live on 2026-10-30. The Office FP2
 # was renamed in Home Assistant; its HomeKit entity ids kept the original name.
@@ -178,6 +176,7 @@ def fp2(tmp_path):
         world = world or World()
         app = mod.Fp2Companion()
         _bind(app, world)
+        world.app = app
         found = [LIVING] if devices is None else devices
         app.lookups = 0
 
@@ -217,32 +216,58 @@ def fp2(tmp_path):
     return make
 
 
+def dev(world, key=KEY):
+    return world.app.devices[key]
+
+
 def cmd(app, key, payload="", device=KEY):
-    """A device command, or an app command (login, logout, rescan)."""
-    topic = (f"fp2companion/cmd/{key}" if key in ("login", "logout", "rescan")
-             else f"fp2companion/{device}/cmd/{key}")
-    app._on_cmd(topic, payload)
+    """One command, as the card or an entity sends it: an app command
+    (login, logout, rescan) or one for a device."""
+    if key == "rescan":
+        app.rescan()
+        return
+    d = app.devices[device]
+    if key.startswith("zone/") and key.endswith("/sensitivity"):
+        d.set_zone_sensitivity(key[len("zone/"):-len("/sensitivity")], payload)
+        return
+    calls = {
+        "refresh": lambda: d.refresh(),
+        "sensitivity": lambda: d.set_sensitivity(payload),
+        "approach_distance": lambda: d.set_approach_distance(payload),
+        "ai_detection": lambda: d.set_ai_detection(payload.lower() in ("on", "1")),
+        "ai_learning": lambda: d.start_ai_learning(),
+        "zone_set": lambda: d.zone_set(_json(payload)),
+        "zone_delete": lambda: d.zone_delete(payload),
+        "restore": lambda: d.restore(payload),
+    }
+    calls[key]()
 
 
-def discovery(world, component, key):
-    raw = mqtt_payload(world, f"homeassistant/{component}/{OBJ}_{key}/config")
-    return json.loads(raw) if raw else raw
+def _json(payload):
+    """What the card's command carries, parsed; a payload that is not JSON
+    goes through as is, so the app's own check sees it."""
+    try:
+        return json.loads(payload)
+    except (TypeError, ValueError):
+        return payload
 
 
-def status(world):
-    return mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/state")
+def status(world, key=KEY):
+    device = world.app.devices.get(key)
+    return device.status if device else None
 
 
 def zone_attrs(world):
-    return json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/zones/attrs"))
+    """What the zones sensor shows, as the worker built it last."""
+    return dev(world).zones_attrs
 
 
 # ----------------------------------------------------------------- startup
-def test_the_app_subscribes_to_its_and_every_devices_commands(fp2):
+def test_a_device_found_is_announced_once(fp2):
     app, world = fp2()
-    assert world.subscriptions == [
-        {"topics": ["fp2companion/cmd/#", "fp2companion/+/cmd/#"],
-         "callback": app._on_cmd}]
+    app.start()
+    app.start()
+    assert world.added == [KEY]
 
 
 def test_the_device_is_found_in_home_assistant(fp2):
@@ -250,53 +275,44 @@ def test_the_device_is_found_in_home_assistant(fp2):
     app.start()
     assert DID in app.dids
     assert app.lookups == 1
-    cfg = discovery(world, "select", "sensitivity")
-    assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
-    assert cfg["device"]["suggested_area"] == "Living Room"
-    assert cfg["device"]["name"] == "Presence-Sensor-FP2-B2C3 Settings"
-    assert cfg["command_topic"] == f"{T}/cmd/sensitivity"
+    info = dev(world).info
+    assert info["prefix"] == PREFIX
+    assert info["area"] == "Living Room"
+    assert info["name"] == "Presence-Sensor-FP2-B2C3"
 
 
-def test_every_entity_carries_the_homekit_prefix(fp2):
-    app, world = fp2()
+def test_the_prefix_comes_from_the_homekit_name(fp2):
+    app, world = fp2(devices=[LIVING, OFFICE])
     app.start()
-    ids = {discovery(world, c, k)["default_entity_id"] for c, k in (
-        ("select", "approach_distance"), ("button", "refresh"),
-        ("sensor", "zones"), ("sensor", "cloud_status"))}
-    assert ids == {f"select.{PREFIX}_approach_distance",
-                   f"button.{PREFIX}_refresh", f"sensor.{PREFIX}_zones",
-                   f"sensor.{PREFIX}_cloud_status"}
+    # The office was renamed in Home Assistant; its HomeKit entity ids, and
+    # so this app's, keep the original name.
+    assert dev(world, "54ef44d4e5f6").info["prefix"] == "presence_sensor_fp2_e5f6"
+    assert dev(world, "54ef44d4e5f6").info["name"] == "Motion Sensor - Office"
 
 
-def test_no_fp2_found_publishes_no_device_and_retries(fp2):
+def test_no_fp2_found_adds_no_device_and_retries(fp2):
     app, world = fp2(devices=[{"serial": None, "name": None, "area": None}])
     app.start()
     assert app.devices == {}
-    topics = [c[2]["topic"] for c in world.calls if c[0] == "mqtt/publish"]
-    assert not [t for t in topics if OBJ in t]
+    assert world.added == []
     assert world.timers[-1]["callback"] == app.start
 
 
 def test_startup_reads_and_publishes_the_values(fp2):
     app, world = fp2()
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "Low"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/approach_distance") == "Far"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/zone/3/sensitivity") == "Medium"
+    assert dev(world).sensitivity == "Low"
+    assert dev(world).approach_distance == "Far"
+    assert dev(world).zone_sensitivity(3) == "Medium"
     assert status(world) == "ok"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/zones/state") == "3"
+    assert len(dev(world).zones) == 3
 
 
 def test_only_detection_zones_get_a_select(fp2):
     app, world = fp2()
     app.start()
-    couch = discovery(world, "select", "zone_3_sensitivity")
-    assert couch["default_entity_id"] == f"select.{PREFIX}_couch_sensitivity"
-    assert couch["name"] == "Couch Sensitivity"
-    kitchen = discovery(world, "select", "zone_1_sensitivity")
-    assert kitchen["default_entity_id"] == \
-        f"select.{PREFIX}_kitchen_countertop_sensitivity"
-    assert discovery(world, "select", "zone_101_sensitivity") is None
+    zones = {z["rangeId"]: z["name"] for z in dev(world).detection_zones()}
+    assert zones == {3: "Couch", 1: "Kitchen Countertop"}
 
 
 def test_startup_checks_the_token(fp2):
@@ -326,7 +342,7 @@ def test_a_setting_is_written_and_read_back(fp2):
     timer = world.timers[-1]
     assert timer["callback"] == app.devices[KEY]._verify_write
     app.devices[KEY]._verify_write({"rid": "14.1.85", "value": "2"})
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "Medium"
+    assert dev(world).sensitivity == "Medium"
     assert status(world) == "ok"
 
 
@@ -339,9 +355,9 @@ def test_a_write_the_device_ignored_is_reported_not_retried(fp2):
     cmd(app, "approach_distance", "Close")
     app.devices[KEY]._verify_write({"rid": "14.47.85", "value": "2"})
     assert status(world) == "write_not_applied"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail == {"rid": "14.47.85", "wrote": "2", "reads": "0"}
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/approach_distance") == "Far"
+    assert dev(world).approach_distance == "Far"
     assert len(app.cloud_fake.writes) == 1
 
 
@@ -353,19 +369,12 @@ def test_an_unknown_option_is_refused_and_nothing_is_written(fp2):
     assert status(world) == "refused"
 
 
-def test_a_topic_outside_the_prefix_is_ignored(fp2):
-    app, world = fp2()
-    app.start()
-    app._on_cmd("lgoled/cmd/sensitivity", "High")
-    assert app.cloud_fake.writes == []
-
-
 def test_refresh_reads_again(fp2):
     app, world = fp2()
     app.start()
     app.cloud_fake.values["14.1.85"] = "3"
     cmd(app, "refresh", "PRESS")
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "High"
+    assert dev(world).sensitivity == "High"
 
 
 # ------------------------------------------------------------------- errors
@@ -383,9 +392,9 @@ def test_a_failed_call_keeps_its_code_and_endpoint(fp2):
     app, world = fp2(cloud=cloud)
     app.start()
     assert status(world) == "cloud_error"
-    attrs = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))
-    assert attrs["last_error"]["code"] == 302
-    assert attrs["last_error"]["endpoint"] == "devex/radar/range/list"
+    shown = attrs(world)
+    assert shown["last_error"]["code"] == 302
+    assert shown["last_error"]["endpoint"] == "devex/radar/range/list"
 
 
 # ------------------------------------------------------------------ backups
@@ -415,25 +424,13 @@ def test_block_order_alone_is_not_a_change(fp2, tmp_path):
 
 
 # --------------------------------------------------------------- zone list
-def test_a_zone_that_went_away_loses_its_select(fp2):
+def test_a_zone_that_went_away_leaves_the_detection_zones(fp2):
     app, world = fp2()
     app.start()
     app.cloud_fake.zones = [z for z in app.cloud_fake.zones
                             if z["rangeId"] != 1]
     cmd(app, "refresh")
-    assert mqtt_payload(
-        world, f"homeassistant/select/{OBJ}_zone_1_sensitivity/config") == ""
-
-
-def test_a_zone_deleted_while_the_app_was_down_is_retired(fp2):
-    app, world = fp2()
-    app.start()
-    cloud = FakeCloud()
-    cloud.zones = [z for z in cloud.zones if z["rangeId"] != 3]
-    app2, world2 = fp2(cloud=cloud)
-    app2.start()
-    assert mqtt_payload(
-        world2, f"homeassistant/select/{OBJ}_zone_3_sensitivity/config") == ""
+    assert [z["rangeId"] for z in dev(world).detection_zones()] == [3]
 
 
 # -------------------------------------------------------------------- zones
@@ -458,7 +455,7 @@ def test_a_zone_select_rewrites_only_that_zones_sensitivity(fp2, tmp_path):
     assert "before-write" in backups(tmp_path)
     fire(world)
     assert status(world) == "ok"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/zone/3/sensitivity") == "High"
+    assert dev(world).zone_sensitivity(3) == "High"
 
 
 def test_an_edit_keeps_every_field_the_card_does_not_send(fp2):
@@ -551,8 +548,7 @@ def with_edge(fp2):
 
 
 def refusal_code(world):
-    attrs = mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs")
-    return json.loads(attrs)["detail"]["code"]
+    return attrs(world)["detail"]["code"]
 
 
 def test_the_room_edge_is_redrawn_with_the_six_fields_the_aqara_app_sends(fp2):
@@ -817,8 +813,8 @@ def test_a_create_sends_no_id_and_finds_the_new_zone(fp2):
     assert "rangeId" not in sent and sent["tagId"] == ""
     fire(world)
     assert status(world) == "ok"
-    desk = discovery(world, "select", "zone_4_sensitivity")
-    assert desk["default_entity_id"] == f"select.{PREFIX}_desk_sensitivity"
+    assert {z["rangeId"]: z["name"] for z in dev(world).detection_zones()}[4] \
+        == "Desk"
 
 
 def test_an_interference_zone_is_never_created(fp2):
@@ -828,7 +824,7 @@ def test_an_interference_zone_is_never_created(fp2):
                                      "regionType": 1}))
     assert app.cloud_fake.zone_writes == []
     assert status(world) == "refused"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "interference_locked"
 
 
@@ -838,7 +834,7 @@ def test_an_edit_of_a_zone_that_is_gone_is_refused(fp2):
     cmd(app, "zone_set", json.dumps({"rangeId": 9, "name": "Ghost",
                                      "blockList": [1]}))
     assert app.cloud_fake.zone_writes == []
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "range_id"
 
 
@@ -848,11 +844,11 @@ def test_a_bad_zone_is_refused_before_any_backup_or_write(fp2, tmp_path):
     cmd(app, "zone_set", json.dumps({"rangeId": 3, "blockList": [0, 321]}))
     assert app.cloud_fake.zone_writes == []
     assert backups(tmp_path) == ["first-read"]
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "bad_block"
 
 
-def test_a_delete_goes_by_id_and_retires_the_select(fp2, tmp_path):
+def test_a_delete_goes_by_id(fp2, tmp_path):
     app, world = fp2()
     app.start()
     cmd(app, "zone_delete", "1")
@@ -860,8 +856,7 @@ def test_a_delete_goes_by_id_and_retires_the_select(fp2, tmp_path):
     assert "before-write" in backups(tmp_path)
     fire(world)
     assert status(world) == "ok"
-    assert mqtt_payload(
-        world, f"homeassistant/select/{OBJ}_zone_1_sensitivity/config") == ""
+    assert [z["rangeId"] for z in dev(world).detection_zones()] == [3]
 
 
 def test_the_interference_zone_is_never_deleted(fp2):
@@ -879,7 +874,7 @@ def test_a_zone_write_that_did_not_land_is_reported(fp2):
     cmd(app, "zone_set", json.dumps({"name": "Desk", "blockList": [15]}))
     fire(world)
     assert status(world) == "zone_write_failed"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["kind"] == "create"
 
 
@@ -909,7 +904,7 @@ def test_a_restore_that_needs_a_new_interference_zone_is_refused(fp2):
                             if z["rangeId"] != 101]
     cmd(app, "restore", first)
     assert app.cloud_fake.zone_writes == [] and app.cloud_fake.deletes == []
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "interference_locked"
 
 
@@ -928,82 +923,19 @@ def test_a_restore_name_cannot_reach_another_file(fp2):
     assert status(world) == "refused"
 
 
-def test_a_backup_can_be_previewed_before_a_restore(fp2):
-    app, world = fp2()
-    app.start()
-    name = zone_attrs(world)["backups"][0]["name"]
-    cmd(app, "preview", name)
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/state") == name
-    attrs = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/attrs"))
-    assert [z["rangeId"] for z in attrs["zones"]] == [3, 1, 101]
-    assert discovery(world, "sensor", "backup_preview")["default_entity_id"] \
-        == f"sensor.{PREFIX}_backup_preview"
-
-
-def test_a_preview_of_no_backup_is_refused(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "preview", "../session.json")
-    assert status(world) == "refused"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/state") is None
-
-
 # -------------------------------------------------------------- signing in
 BLOB = "QkxPQg==" * 20
 
 
 def attrs(world):
-    return json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))
+    """What the cloud status sensor shows, as the worker built it last."""
+    return dev(world).status_attrs
 
 
 def test_the_account_is_shown_partly_hidden(fp2):
     app, world = fp2()
     app.start()
     assert attrs(world)["account"] == "j.w*****@example.com"
-
-
-def test_a_sign_in_from_the_card_passes_the_blob_and_reads(fp2):
-    app, world = fp2()
-    app.start()
-    app.cloud_fake.account_name = None
-    app.cloud_fake.has_token = False
-    cmd(app, "login", json.dumps({"account": "new.user@example.com",
-                                  "password_rsa": BLOB}))
-    assert app.cloud_fake.logins == [("new.user@example.com", BLOB)]
-    assert status(world) == "ok"
-    assert attrs(world)["account"] == "new*****@example.com"
-    assert not any(BLOB in line for line in world.logs)
-    assert not any("new.user@example.com" in line for line in world.logs)
-
-
-def test_a_refused_sign_in_says_so(fp2):
-    app, world = fp2()
-    app.start()
-    app.cloud_fake.login_error = AqaraError("user/login", 10012,
-                                            "password error")
-    cmd(app, "login", json.dumps({"account": "a@example.com",
-                                  "password_rsa": BLOB}))
-    assert status(world) == "login_failed"
-    assert attrs(world)["detail"]["code"] == 10012
-    # The session that was working still is.
-    assert attrs(world)["account"] == "j.w*****@example.com"
-
-
-def test_a_sign_in_that_is_not_json_is_refused(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "login", "user:password")
-    assert app.cloud_fake.logins == []
-    assert status(world) == "refused"
-
-
-def test_a_sign_out_forgets_the_session(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "logout")
-    assert status(world) == "no_session"
-    assert attrs(world)["account"] is None
-    assert attrs(world)["signed_in"] is False
 
 
 def test_a_session_from_before_the_card_counts_as_signed_in(fp2):
@@ -1027,9 +959,7 @@ def test_mask_account(fp2, account, shown):
 def test_the_ai_switch_reflects_the_device(fp2):
     app, world = fp2()
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/ai_detection") == "off"
-    cfg = discovery(world, "switch", "ai_detection")
-    assert cfg["default_entity_id"] == f"switch.{PREFIX}_ai_detection"
+    assert dev(world).ai_detection is False
 
 
 def test_the_ai_switch_writes_and_reads_back(fp2):
@@ -1039,7 +969,7 @@ def test_the_ai_switch_writes_and_reads_back(fp2):
     assert app.cloud_fake.writes == [("4.72.85", "1")]
     app.cloud_fake.values["14.1.85"] = "3"          # the device masks it
     world.timers[-1]["callback"](world.timers[-1]["kwargs"])
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/ai_detection") == "on"
+    assert dev(world).ai_detection is True
     assert status(world) == "ok"
 
 
@@ -1078,19 +1008,10 @@ def two(fp2):
     return app, world, clouds[OFFICE_DID]
 
 
-def test_every_fp2_found_gets_its_own_entities(fp2):
+def test_every_fp2_found_is_served(fp2):
     app, world, _ = two(fp2)
-    raw = mqtt_payload(world, "homeassistant/select/"
-                              "fp2_companion_lumi1_54ef44d4e5f6_sensitivity/config")
-    cfg = json.loads(raw)
-    # The id follows the HomeKit entities, built from the original name; the
-    # device shows the name the owner gave it.
-    assert cfg["default_entity_id"] == "select.presence_sensor_fp2_e5f6_sensitivity"
-    assert cfg["device"]["name"] == "Motion Sensor - Office Settings"
-    assert cfg["device"]["suggested_area"] == "Office"
-    assert cfg["command_topic"] == "fp2companion/54ef44d4e5f6/cmd/sensitivity"
-    assert discovery(world, "select", "sensitivity")["default_entity_id"] == \
-        f"select.{PREFIX}_sensitivity"
+    assert world.added == [KEY, "54ef44d4e5f6"]
+    assert dev(world, "54ef44d4e5f6").sensitivity == "Low"
 
 
 def test_a_command_reaches_only_its_device(fp2):
@@ -1100,15 +1021,15 @@ def test_a_command_reaches_only_its_device(fp2):
     assert app.cloud_fake.writes == []
 
 
-def test_the_hub_lists_the_devices_and_the_countries(fp2):
+def test_the_hub_lists_the_devices(fp2):
     app, world, _ = two(fp2)
-    hub = json.loads(mqtt_payload(world, "fp2companion/hub/attrs"))
+    hub = app.hub_attrs
     # In serial order.
     assert [(d["key"], d["prefix"]) for d in hub["devices"]] == [
         (KEY, PREFIX), ("54ef44d4e5f6", "presence_sensor_fp2_e5f6")]
-    assert ["GR", "Greece"] in hub["countries"]
+    assert "countries" not in hub
     assert hub["signed_in"] is True
-    assert mqtt_payload(world, "fp2companion/hub/state") == "2"
+    assert len(app.devices) == 2
 
 
 def test_a_device_on_another_account_says_so_and_the_other_works(fp2):
@@ -1117,7 +1038,7 @@ def test_a_device_on_another_account_says_so_and_the_other_works(fp2):
                                           "You do not have permission")
     app, world = fp2(devices=[LIVING, OFFICE], clouds=clouds)
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44d4e5f6/status/state") == \
+    assert dev(world, "54ef44d4e5f6").status == \
         "not_on_account"
     assert status(world) == "ok"
 
@@ -1127,16 +1048,8 @@ def test_a_lost_session_reaches_every_device(fp2):
     app.cloud_fake.fail = AqaraAuthError("res/write", 108, "expired")
     cmd(app, "refresh")
     assert status(world) == "no_session"
-    assert mqtt_payload(world, "fp2companion/54ef44d4e5f6/status/state") == \
+    assert dev(world, "54ef44d4e5f6").status == \
         "no_session"
-
-
-def test_a_sign_in_carries_the_country(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "login", json.dumps({"account": "a@example.com",
-                                  "password_rsa": BLOB, "country": "US"}))
-    assert app.cloud_fake.login_country == "US"
 
 
 def test_rescan_adds_a_device_that_appeared(fp2):
@@ -1247,13 +1160,13 @@ def test_a_retry_that_fires_cancels_its_own_handle_silently(fp2):
     assert world.silent_cancels == [True]
 
 
-def test_a_token_refresh_republishes_the_hub(fp2):
+def test_a_token_refresh_updates_the_hub(fp2):
     app, world = fp2()
     app.start()
-    world.calls.clear()
+    world.changes.clear()
     app.cloud_fake.due = True
     app.token_check()
-    assert mqtt_payload(world, "fp2companion/hub/attrs") is not None
+    assert None in world.changes and KEY in world.changes
 
 
 # ----------------------------------------------------------------- live positions
@@ -1275,29 +1188,21 @@ def test_a_card_lease_reaches_the_tracker_per_device_and_tab(fp2):
     app, world = fp2(devices=[LIVING, OFFICE])
     app.start()
     app.tracker = FakeTracker()
-    cmd(app, "track", json.dumps({"client": "tab-1", "on": True}))
-    cmd(app, "track", json.dumps({"client": "tab-2", "on": True}),
-        device="54ef44d4e5f6")
-    cmd(app, "track", json.dumps({"client": "tab-1", "on": False}))
-    cmd(app, "track", "on")                     # no client: ignored
+    dev(world).track("tab-1", True)
+    dev(world, "54ef44d4e5f6").track("tab-2", True)
+    dev(world).track("tab-1", False)
+    dev(world).track("", True)                  # no client: ignored
     assert app.tracker.calls == [("lease", DID, "tab-1"),
                                  ("lease", OFFICE_DID, "tab-2"),
                                  ("release", DID, "tab-1")]
 
 
-def test_live_positions_are_published_unretained(fp2):
+def test_live_positions_go_to_the_device_that_sent_them(fp2):
     app, world = fp2()
     app.start()
-    before = len(world.calls)
-    app._live_pub(DID, {"state": "live", "targets": []})
-    app._live_pub("lumi1.unknown", {"state": "live"})
-    calls = world.calls[before:]
-    assert len(calls) == 1
-    service, _entity, data = calls[0]
-    assert service == "mqtt/publish"
-    assert data["retain"] is False and data["qos"] == 0
-    assert data["topic"] == f"{T}/live"
-    assert json.loads(data["payload"]) == {"state": "live", "targets": []}
+    app._live_out(DID, {"state": "live", "targets": []})
+    app._live_out("lumi1.unknown", {"state": "live"})
+    assert world.live == [(KEY, {"state": "live", "targets": []})]
 
 
 def test_terminate_shuts_the_tracker_down_once(fp2):
@@ -1330,3 +1235,273 @@ def test_no_old_card_copy_logs_nothing(fp2, tmp_path):
     before = list(world.logs)
     app._check_old_card()
     assert world.logs == before
+
+
+def test_a_session_file_that_does_not_parse_reads_as_signed_out(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    (tmp_path / "session.json").write_text("{not json")
+    app.session.store.load = lambda: json.loads("{not json")
+    app.token_check()
+    assert app.hub_attrs["signed_in"] is False
+    assert any("session file not readable" in line for line in world.logs)
+
+
+def test_the_card_sees_only_the_newest_backups(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    mod = fp2.mod
+    folder = tmp_path / "backups" / DID
+    for i in range(mod.BACKUPS_SHOWN + 5):
+        (folder / f"zones-2026110{i // 10}T0000{i % 10:02d}.json").write_text(
+            json.dumps({"zones": [], "saved_at": i, "reason": "changed"}))
+    cmd(app, "refresh")
+    assert len(zone_attrs(world)["backups"]) == mod.BACKUPS_SHOWN
+
+
+def test_a_lost_session_asks_home_assistant_for_a_sign_in(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraAuthError("res/write", 108, "expired")
+    cmd(app, "refresh")
+    assert world.signed_out >= 1
+
+
+def test_a_lost_cloud_is_logged_once_and_its_return_once(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    cmd(app, "refresh")
+    cmd(app, "refresh")
+    assert sum("cloud call failed" in line for line in world.logs) == 1
+    assert dev(world).reachable is False
+    app.cloud_fake.fail = None
+    cmd(app, "refresh")
+    assert sum("answers again" in line for line in world.logs) == 1
+    assert dev(world).reachable is True
+
+
+# ------------------------------------------------------- refusals and failures
+def raises(exc):
+    """A cloud call that fails with `exc`."""
+    def call(*_args, **_kwargs):
+        raise exc
+    return call
+
+
+def test_parse_discovery_skips_an_fp2_with_a_bad_serial_and_a_bad_yaml_serial(fp2):
+    rows = [dict(LIVING, serial="not a serial"), OFFICE]
+    found = fp2.mod.parse_discovery(rows, manual=["54EF44", "54EF44A1B2CG"])
+    assert [d["key"] for d in found] == ["54ef44d4e5f6"]
+
+
+def test_a_backup_that_goes_away_before_it_is_read_is_followed_by_a_new_one(
+        fp2, monkeypatch):
+    """The newest backup can be deleted between its listing and its read, by
+    a person cleaning the folder; the zones are then backed up again."""
+    app, world = fp2()
+    app.start()
+
+    def gone(folder, name):
+        raise FileNotFoundError(name)
+
+    monkeypatch.setattr(fp2.mod, "read_backup", gone)
+    app._now = lambda: 1793350060.0
+    cmd(app, "refresh")
+    rows = zone_attrs(world)["backups"]
+    assert [r["reason"] for r in rows] == ["changed", "first-read"]
+
+
+def test_a_write_the_client_refuses_is_reported_and_not_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.write_rid = raises(AqaraRefused("'5' is not a value"))
+    cmd(app, "approach_distance", "Close")
+    assert status(world) == "refused"
+    assert attrs(world)["detail"]["reason"] == "'5' is not a value"
+    assert len(world.timers) == timers
+
+
+def test_a_write_the_cloud_fails_is_reported_and_not_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.write_rid = raises(AqaraError("res/write", None, "timeout"))
+    cmd(app, "ai_detection", "on")
+    assert status(world) == "cloud_error"
+    assert attrs(world)["last_error"]["endpoint"] == "res/write"
+    # No readback of the write; only the read that waits for the cloud.
+    assert [(x["callback"], x["delay"]) for x in world.timers[timers:]] == [
+        (dev(world)._retry_read, 60)]
+
+
+def test_a_readback_that_cannot_read_does_not_judge_the_write(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "sensitivity", "Medium")
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    app.devices[KEY]._verify_write({"rid": "14.1.85", "value": "2"})
+    assert status(world) == "cloud_error"
+    assert attrs(world)["detail"] is None
+
+
+def test_a_zone_readback_that_cannot_read_does_not_judge_the_write(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"name": "Desk", "blockList": [15]}))
+    app.cloud_fake.fail = AqaraError("devex/radar/range/list", None, "timeout")
+    fire(world)
+    assert status(world) == "cloud_error"
+
+
+def test_ai_learning_the_cloud_rejects_starts_no_count(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.write_rid = raises(AqaraError("res/write", 302, "Params error"))
+    cmd(app, "ai_learning", "PRESS")
+    assert status(world) == "cloud_error"
+    assert attrs(world)["learning_until"] is None
+
+
+@pytest.mark.parametrize("range_id, label", [("abc", "High"), ("3", "Maximum"),
+                                             (True, "High")])
+def test_a_zone_sensitivity_for_a_bad_zone_or_label_is_refused(fp2, range_id,
+                                                               label):
+    app, world = fp2()
+    app.start()
+    dev(world).set_zone_sensitivity(range_id, label)
+    assert app.cloud_fake.zone_writes == []
+    assert status(world) == "refused"
+
+
+def test_a_zone_set_that_is_not_an_object_is_refused(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", "not json")
+    assert app.cloud_fake.zone_writes == []
+    assert attrs(world)["detail"]["reason"] == "zone_set needs a JSON object"
+
+
+@pytest.mark.parametrize("error, shown", [
+    (AqaraRefused("not a zone of this device"), "refused"),
+    (AqaraError("devex/radar/range/set", None, "timeout"), "cloud_error")])
+def test_a_zone_write_that_fails_is_reported_and_not_read_back(fp2, error,
+                                                               shown):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.set_zone = raises(error)
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "name": "Sofa"}))
+    assert status(world) == shown
+    # No readback of the write; a cloud failure only waits for the cloud.
+    added = [x["callback"] for x in world.timers[timers:]]
+    assert added == ([dev(world)._retry_read] if shown == "cloud_error" else [])
+
+
+def test_the_edge_becomes_a_detection_zone_of_the_type_the_card_chose(fp2):
+    app, world = with_edge(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "regionType": 0,
+                                     "name": "Bed", "blockList": [1, 2, 3],
+                                     "tagId": "3.6"}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert (sent["tagId"], sent["tagName"]) == ("3.6", "Bed")
+
+
+@pytest.mark.parametrize("range_id", [True, -1, "x", None, 1.5])
+def test_a_zone_delete_without_a_valid_range_id_is_refused(fp2, range_id):
+    app, world = fp2()
+    app.start()
+    dev(world).zone_delete(range_id)
+    assert app.cloud_fake.deletes == []
+    assert status(world) == "refused"
+
+
+def test_a_zone_delete_by_an_int_range_id_is_sent(fp2):
+    app, world = fp2()
+    app.start()
+    dev(world).zone_delete(1)
+    assert app.cloud_fake.deletes == [[1]]
+
+
+def test_a_delete_of_a_zone_that_is_gone_is_refused(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_delete", "9")
+    assert app.cloud_fake.deletes == []
+    assert refusal_code(world) == "range_id"
+    assert backups(tmp_path) == ["first-read"]
+
+
+def test_a_delete_the_cloud_fails_is_reported(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.delete_zones = raises(
+        AqaraError("devex/radar/range/delete", None, "timeout"))
+    cmd(app, "zone_delete", "1")
+    assert status(world) == "cloud_error"
+
+
+def test_a_restore_the_cloud_fails_partway_is_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    first = zone_attrs(world)["backups"][0]["name"]
+    # The plan rewrites the couch, then deletes the desk; the delete fails
+    # after the rewrite went out, so the device is read back as it now is.
+    app.cloud_fake.zones[0] = dict(app.cloud_fake.zones[0], sensitivity=3)
+    app.cloud_fake.zones.append(zone(4, "Desk", 0, 1, [15, 16]))
+    app.cloud_fake.delete_zones = raises(
+        AqaraError("devex/radar/range/delete", None, "timeout"))
+    cmd(app, "restore", first)
+    assert app.cloud_fake.zone_writes
+    assert status(world) == "cloud_error"
+    assert world.timers[-1]["callback"] == app.devices[KEY].read_all
+
+
+def test_a_zone_that_is_not_there_has_no_sensitivity(fp2):
+    app, world = fp2()
+    app.start()
+    assert dev(world).zone_sensitivity(9) is None
+
+
+def test_a_token_check_without_a_session_asks_for_a_sign_in(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.ensure_fresh = raises(
+        AqaraAuthError("user/refresh-token", 108, "expired"))
+    app.token_check()
+    assert status(world) == "no_session"
+    assert world.signed_out == 1
+    assert any("token check failed" in line for line in world.logs)
+
+
+def test_a_failed_read_is_tried_again_later_until_the_cloud_answers(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    retries = [x for x in world.timers if x["callback"] == dev(world)._retry_read]
+    assert [x["delay"] for x in retries] == [60]
+    cmd(app, "refresh")                 # a pending retry is not doubled
+    assert len([x for x in world.timers
+                if x["callback"] == dev(world)._retry_read]) == 1
+    retries[0]["callback"](retries[0]["kwargs"])
+    assert [x["delay"] for x in world.timers
+            if x["callback"] == dev(world)._retry_read] == [60, 300]
+    app.cloud_fake.fail = None
+    last = world.timers[-1]
+    last["callback"](last["kwargs"])
+    assert dev(world).reachable is True
+    assert status(world) == "ok"
+
+
+def test_a_refused_command_does_not_hide_a_lost_cloud(fp2):
+    app, world = fp2()
+    app.cloud_fake.values.update({"4.72.85": "1", "14.1.85": "3"})
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    cmd(app, "sensitivity", "Low")      # refused without asking the cloud
+    assert status(world) == "refused"
+    assert dev(world).reachable is False
