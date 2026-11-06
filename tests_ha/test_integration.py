@@ -479,3 +479,77 @@ async def test_the_mqtt_entities_move_with_their_ids_and_settings(
     assert registry.async_get(f"select.{PREFIX}_sensitivity").name \
         == "Living sensitivity"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+# ------------------------------------------------------- the card's commands
+async def test_a_card_command_reaches_the_device(hass, entry, hass_ws_client) -> None:
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({
+        "type": "fp2_companion/backup/preview", "device": KEY,
+        "name": "no-such-backup"})
+    assert (await client.receive_json())["success"]
+    await wait_for_worker(hass, entry)
+    assert hass.states.get(f"sensor.{PREFIX}_cloud_status").state == "refused"
+
+
+async def test_a_zone_is_checked_before_it_reaches_the_device(
+        hass, entry, hass_ws_client) -> None:
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({
+        "type": "fp2_companion/zone/set", "device": KEY,
+        "zone": {"name": "Desk", "blockList": [1], "sensitivity": 9}})
+    reply = await client.receive_json()
+    assert not reply["success"]
+    assert reply["error"]["code"] == "invalid_format"
+
+
+async def test_an_unknown_device_is_an_error(hass, entry, hass_ws_client) -> None:
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({
+        "type": "fp2_companion/zone/delete", "device": "54ef44d4e5f6",
+        "range_id": 1})
+    reply = await client.receive_json()
+    assert reply["error"]["code"] == "unknown_device"
+
+
+async def test_a_user_who_is_not_an_admin_is_refused(
+        hass, entry, hass_ws_client, hass_read_only_access_token) -> None:
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    for message in (
+            {"type": "fp2_companion/backup/restore", "device": KEY, "name": "x"},
+            {"type": "fp2_companion/logout"},
+            {"type": "fp2_companion/live/subscribe", "device": KEY}):
+        await client.send_json_auto_id(message)
+        reply = await client.receive_json()
+        assert reply["error"]["code"] == "unauthorized", message
+
+
+async def test_the_live_view_holds_a_lease_while_it_is_open(
+        hass, entry, hass_ws_client) -> None:
+    app = entry.runtime_data
+    device = app.devices[KEY]
+    leases = []
+    device.track = lambda client, on: leases.append((client, on))
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "fp2_companion/live/subscribe", "device": KEY})
+    reply = await client.receive_json()
+    assert reply["success"]
+    sub_id = reply["id"]
+    await wait_for_worker(hass, entry)
+    assert [on for _c, on in leases] == [True]
+    await hass.async_add_executor_job(
+        app.live, KEY, {"state": "live", "targets": []})
+    event = await client.receive_json()
+    assert event["id"] == sub_id
+    assert event["event"] == {"state": "live", "targets": []}
+    # Renewed while it stays open, released when it closes.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await wait_for_worker(hass, entry)
+    assert [on for _c, on in leases] == [True, True]
+    await client.send_json_auto_id(
+        {"type": "unsubscribe_events", "subscription": sub_id})
+    assert (await client.receive_json())["success"]
+    await wait_for_worker(hass, entry)
+    assert [on for _c, on in leases] == [True, True, False]
+    assert len({c for c, _on in leases}) == 1

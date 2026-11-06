@@ -17,7 +17,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import config_validation as cv, issue_registry as ir
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     APPDAEMON_APP_DIRS,
@@ -36,10 +37,19 @@ from .const import (
 )
 from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
+from .websocket_api import async_setup as async_setup_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.BUTTON, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the card's websocket commands."""
+    async_setup_websocket_api(hass)
+    return True
 
 type Fp2CompanionConfigEntry = ConfigEntry[HassFp2Companion]
 
