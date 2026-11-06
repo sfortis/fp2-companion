@@ -35,6 +35,7 @@ from .const import (
     ISSUE_APPDAEMON_APP,
     STATE_DIR,
 )
+from .auth import parse_identities
 from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
 from .websocket_api import async_setup as async_setup_websocket_api
@@ -200,13 +201,3 @@ def _app_args(
         "app_identities": parse_identities(options.get(CONF_APP_IDENTITIES, [])),
         "card_dir": hass.config.path("www", "fp2-companion"),
     }
-
-
-def parse_identities(values: list[str]) -> list[list[str]]:
-    """`app_id:app_key` per entry, as [app_id, app_key] pairs."""
-    pairs = []
-    for value in values:
-        app_id, sep, app_key = str(value).strip().partition(":")
-        if sep and app_id.strip() and app_key.strip():
-            pairs.append([app_id.strip(), app_key.strip()])
-    return pairs

@@ -77,13 +77,44 @@ async def entry(hass: HomeAssistant, fp2_device):
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_creates_one_entry(hass: HomeAssistant) -> None:
+SIGN_IN = {"account": "a@example.com", "password": "secret", "country": "GR"}
+
+
+@pytest.fixture
+def signed_in(monkeypatch):
+    """The config flow's sign-in, without the cloud: it records each call
+    and fails with `signed_in.fail` when that is set."""
+    from custom_components.fp2_companion import auth, config_flow
+
+    calls = []
+
+    def sign_in(state_dir, account, password, country, identities):
+        calls.append((account, password, country, identities))
+        if calls_fail[0] is not None:
+            raise auth.SignInFailed(calls_fail[0])
+
+    calls_fail = [None]
+    monkeypatch.setattr(config_flow, "sign_in", sign_in)
+
+    class Recorder(list):
+        def fail(self, reason):
+            calls_fail[0] = reason
+
+    recorder = Recorder()
+    recorder.calls = calls
+    return recorder
+
+
+async def test_setup_signs_in_and_keeps_no_password(hass, signed_in) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"})
     assert result["type"] is FlowResultType.FORM
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {})
+        result["flow_id"], dict(SIGN_IN, app_identity="id:key"))
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert signed_in.calls == [("a@example.com", "secret", "GR", [["id", "key"]])]
+    assert result["data"] == {"account": "a@example.com", "country": "GR"}
+    assert result["options"] == {"app_identities": ["id:key"]}
     await hass.async_block_till_done()
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"})
@@ -555,7 +586,7 @@ async def test_a_user_who_is_not_an_admin_is_refused(
     client = await hass_ws_client(hass, hass_read_only_access_token)
     for message in (
             {"type": "fp2_companion/backup/restore", "device": KEY, "name": "x"},
-            {"type": "fp2_companion/logout"},
+            {"type": "fp2_companion/zone/delete", "device": KEY, "range_id": 1},
             {"type": "fp2_companion/live/subscribe", "device": KEY}):
         await client.send_json_auto_id(message)
         reply = await client.receive_json()
@@ -703,3 +734,67 @@ async def test_the_broker_is_cleared_and_a_failed_clear_is_retried(
     assert f"homeassistant/select/{OBJ}_sensitivity/config" in cleared
     assert not await hass.async_add_executor_job(os.path.exists, pending)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+
+@pytest.mark.parametrize("reason", ["invalid_auth", "cannot_connect",
+                                    "invalid_identity_region"])
+async def test_a_failed_sign_in_shows_why_and_recovers(
+        hass, signed_in, reason) -> None:
+    from custom_components.fp2_companion.auth import SignInError
+
+    signed_in.fail(SignInError(reason))
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], SIGN_IN)
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": reason}
+    # The form comes back with what was typed, but not the password.
+    fields = {k: k.description for k in result["data_schema"].schema}
+    assert fields["account"] == {"suggested_value": "a@example.com"}
+    assert not (fields["password"] or {}).get("suggested_value")
+    signed_in.fail(None)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], SIGN_IN)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_malformed_identity_is_refused_before_signing_in(
+        hass, signed_in) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], dict(SIGN_IN, app_identity="nokey"))
+    assert result["errors"] == {"app_identity": "invalid_identity"}
+    assert signed_in.calls == []
+
+
+async def test_a_lost_session_asks_for_a_sign_in(hass, entry) -> None:
+    """There is no session in the tests, so the start already lost it."""
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [f["context"]["source"] for f in flows] == ["reauth"]
+
+
+async def test_reauth_signs_in_again_and_reloads(hass, entry, signed_in) -> None:
+    flow = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], SIGN_IN)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data == {"account": "a@example.com", "country": "GR"}
+    await hass.async_block_till_done()
+
+
+async def test_reconfigure_changes_the_account(hass, entry, signed_in) -> None:
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["step_id"] == "reconfigure"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], dict(SIGN_IN, account="b@example.com", country="US"))
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data == {"account": "b@example.com", "country": "US"}
+    await hass.async_block_till_done()

@@ -3,7 +3,8 @@
 Up to version 1.4.x the card sent its commands with the `mqtt.publish` action,
 which every Home Assistant user may call, and read the live positions with
 an MQTT subscription. Every command here requires an admin user: a zone
-write, a restore or a sign-in changes the FP2 and the Aqara account.
+write or a restore changes the FP2. The sign-in is the config flow's
+(decision 28).
 
 A command is queued on the app's worker and answered at once; what it came
 to shows on the device's cloud status sensor, as before. A backup preview is
@@ -61,8 +62,6 @@ def async_setup(hass: HomeAssistant) -> None:
         ws_zone_delete,
         ws_backup_preview,
         ws_backup_restore,
-        ws_login,
-        ws_logout,
         ws_live_subscribe,
     ):
         websocket_api.async_register_command(hass, command)
@@ -182,44 +181,6 @@ def ws_backup_restore(
     if found := _device(hass, connection, msg):
         app, device = found
         app.submit(device.restore, msg["name"])
-        connection.send_result(msg["id"])
-
-
-@websocket_api.require_admin
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "fp2_companion/login",
-        vol.Required("account"): vol.All(str, vol.Length(min=1, max=128)),
-        vol.Required("password_rsa"): vol.All(str, vol.Length(min=1, max=4096)),
-        vol.Required("country"): vol.All(str, vol.Length(min=2, max=8)),
-    }
-)
-@callback
-def ws_login(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Sign in to Aqara with the password the card encrypted."""
-    if app := _app(hass, connection, msg):
-        app.submit(
-            app.login,
-            {
-                "account": msg["account"],
-                "password_rsa": msg["password_rsa"],
-                "country": msg["country"],
-            },
-        )
-        connection.send_result(msg["id"])
-
-
-@websocket_api.require_admin
-@websocket_api.websocket_command({vol.Required("type"): "fp2_companion/logout"})
-@callback
-def ws_logout(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Sign out of Aqara."""
-    if app := _app(hass, connection, msg):
-        app.submit(app.logout)
         connection.send_result(msg["id"])
 
 

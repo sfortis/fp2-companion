@@ -223,12 +223,6 @@ def dev(world, key=KEY):
 def cmd(app, key, payload="", device=KEY):
     """One command, as the card or an entity sends it: an app command
     (login, logout, rescan) or one for a device."""
-    if key == "login":
-        app.login(_json(payload))
-        return
-    if key == "logout":
-        app.logout()
-        return
     if key == "rescan":
         app.rescan()
         return
@@ -952,48 +946,12 @@ def test_the_account_is_shown_partly_hidden(fp2):
     assert attrs(world)["account"] == "j.w*****@example.com"
 
 
-def test_a_sign_in_from_the_card_passes_the_blob_and_reads(fp2):
-    app, world = fp2()
-    app.start()
-    app.cloud_fake.account_name = None
-    app.cloud_fake.has_token = False
-    cmd(app, "login", json.dumps({"account": "new.user@example.com",
-                                  "password_rsa": BLOB}))
-    assert app.cloud_fake.logins == [("new.user@example.com", BLOB)]
-    assert status(world) == "ok"
-    assert attrs(world)["account"] == "new*****@example.com"
-    assert not any(BLOB in line for line in world.logs)
-    assert not any("new.user@example.com" in line for line in world.logs)
 
 
-def test_a_refused_sign_in_says_so(fp2):
-    app, world = fp2()
-    app.start()
-    app.cloud_fake.login_error = AqaraError("user/login", 10012,
-                                            "password error")
-    cmd(app, "login", json.dumps({"account": "a@example.com",
-                                  "password_rsa": BLOB}))
-    assert status(world) == "login_failed"
-    assert attrs(world)["detail"]["code"] == 10012
-    # The session that was working still is.
-    assert attrs(world)["account"] == "j.w*****@example.com"
 
 
-def test_a_sign_in_that_is_not_json_is_refused(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "login", "user:password")
-    assert app.cloud_fake.logins == []
-    assert status(world) == "refused"
 
 
-def test_a_sign_out_forgets_the_session(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "logout")
-    assert status(world) == "no_session"
-    assert attrs(world)["account"] is None
-    assert attrs(world)["signed_in"] is False
 
 
 def test_a_session_from_before_the_card_counts_as_signed_in(fp2):
@@ -1079,13 +1037,13 @@ def test_a_command_reaches_only_its_device(fp2):
     assert app.cloud_fake.writes == []
 
 
-def test_the_hub_lists_the_devices_and_the_countries(fp2):
+def test_the_hub_lists_the_devices(fp2):
     app, world, _ = two(fp2)
     hub = app.hub_attrs
     # In serial order.
     assert [(d["key"], d["prefix"]) for d in hub["devices"]] == [
         (KEY, PREFIX), ("54ef44d4e5f6", "presence_sensor_fp2_e5f6")]
-    assert ["GR", "Greece"] in hub["countries"]
+    assert "countries" not in hub
     assert hub["signed_in"] is True
     assert len(app.devices) == 2
 
@@ -1110,12 +1068,6 @@ def test_a_lost_session_reaches_every_device(fp2):
         "no_session"
 
 
-def test_a_sign_in_carries_the_country(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "login", json.dumps({"account": "a@example.com",
-                                  "password_rsa": BLOB, "country": "US"}))
-    assert app.cloud_fake.login_country == "US"
 
 
 def test_rescan_adds_a_device_that_appeared(fp2):
@@ -1323,3 +1275,11 @@ def test_the_card_sees_only_the_newest_backups(fp2, tmp_path):
             json.dumps({"zones": [], "saved_at": i, "reason": "changed"}))
     cmd(app, "refresh")
     assert len(zone_attrs(world)["backups"]) == mod.BACKUPS_SHOWN
+
+
+def test_a_lost_session_asks_home_assistant_for_a_sign_in(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraAuthError("res/write", 108, "expired")
+    cmd(app, "refresh")
+    assert world.signed_out >= 1

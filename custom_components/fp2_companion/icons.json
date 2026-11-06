@@ -33,7 +33,6 @@
         "state": {
           "no_session": "mdi:cloud-lock",
           "cloud_error": "mdi:cloud-alert",
-          "login_failed": "mdi:cloud-lock",
           "not_on_account": "mdi:cloud-question",
           "refused": "mdi:cloud-cancel",
           "write_not_applied": "mdi:cloud-alert",

@@ -39,7 +39,6 @@ from .aqara_cloud import (RID_AI_LEARNING, RID_AI_MODE, RID_APPROACH_DISTANCE,
                          AqaraError, AqaraRefused, SessionStore,
                          did_from_serial, jwt_exp)
 from .live_track import LiveTracker, to_grid
-from .regions import COUNTRIES
 from .zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
                         ERR_ENTRANCE_LOCKED, ERR_NO_BLOCKS, ERR_RANGE_ID,
                         LOCKED_REGIONS, REGION_DETECTION, REGION_EDGE,
@@ -85,7 +84,6 @@ STATUS_NO_SESSION = "no_session"
 STATUS_CLOUD_ERROR = "cloud_error"
 STATUS_WRITE_NOT_APPLIED = "write_not_applied"
 STATUS_ZONE_WRITE_FAILED = "zone_write_failed"
-STATUS_LOGIN_FAILED = "login_failed"
 STATUS_REFUSED = "refused"
 
 # What the cloud answers for a device id the signed-in account does not hold,
@@ -106,9 +104,8 @@ STATUS_TEXT = {
     STATUS_STARTING: "Starting.",
     STATUS_OK: "Settings and zones read from the cloud.",
     STATUS_NOT_ON_ACCOUNT: "This FP2 is not on the signed-in Aqara account.",
-    STATUS_NO_SESSION: "Not signed in to Aqara. Sign in on the card.",
-    STATUS_LOGIN_FAILED: "Aqara refused the sign-in. The previous session, "
-                         "if there was one, is unchanged.",
+    STATUS_NO_SESSION: "Not signed in to Aqara. Sign in from the "
+                       "integration in Settings, Devices & services.",
     STATUS_CLOUD_ERROR: "The last cloud call failed.",
     STATUS_WRITE_NOT_APPLIED: "The cloud accepted the write but the device "
                               "still reports the old value. The AI "
@@ -731,7 +728,8 @@ class Fp2Companion:
     **kwargs)`, `run_daily(callback, "HH:MM:SS")`, `cancel_timer(handle,
     silent)`, `find_devices()`, `added(device)` when a device is first
     served, `changed(key)` after a device's state changed (None for the app's
-    own state) and `live(key, message)` for one live position message. A
+    own state), `live(key, message)` for one live position message and
+    `signed_out()` when the Aqara session is gone. A
     timer's callback receives its keyword arguments as one dict, as it did
     under AppDaemon, where this class began.
     """
@@ -885,6 +883,8 @@ class Fp2Companion:
             device.values = {}
             device._set_status(STATUS_NO_SESSION)
         self._hub_changed()
+        # Home Assistant asks for the password again (the reauth flow).
+        self.signed_out()
 
     def session_info(self):
         """The shared session, from ONE read of the file: every device's
@@ -900,51 +900,6 @@ class Fp2Companion:
                 "country": session.get("country"),
                 "token_expires": _iso(jwt_exp(token)) if token else None}
 
-    def login(self, request):
-        """Sign in from the card (decisions 15, 16 and 19). The request
-        carries the account, the country and the password already encrypted
-        in the browser; neither the account nor the block is logged, and only
-        the token is kept."""
-        if not isinstance(request, dict):
-            self._refuse_all("login needs an object")
-            return
-        account = str(request.get("account") or "")
-        with self.lock:
-            try:
-                self.session.login(account,
-                                   encrypted_password=request.get("password_rsa"),
-                                   country=request.get("country"))
-            except AqaraRefused as exc:
-                self._refuse_all(str(exc))
-                return
-            except AqaraError as exc:
-                self.log(f"sign-in for {mask_account(account)} refused: "
-                         f"code {exc.code}", level="WARNING")
-                for device in self.devices.values():
-                    device.last_error = {"endpoint": exc.endpoint,
-                                         "code": exc.code,
-                                         "message": exc.message,
-                                         "at": self._now()}
-                    device._set_status(STATUS_LOGIN_FAILED,
-                                       {"code": exc.code,
-                                        "reason": exc.message})
-                return
-        self.log(f"signed in as {mask_account(account)}")
-        self._hub_changed()
-        for device in self.devices.values():
-            device.last_error = None
-            device.read_all()
-
-    def logout(self):
-        with self.lock:
-            self.session.logout()
-        self.log("signed out; the PhoneId is kept for the next sign-in")
-        self.session_lost()
-
-    def _refuse_all(self, reason):
-        for device in self.devices.values():
-            device._refuse(reason)
-
     def rescan(self):
         self.start()
 
@@ -954,14 +909,12 @@ class Fp2Companion:
         self.changed(None)
 
     def hub_attributes(self):
-        """What the app itself shows: the devices for the card's dropdown,
-        the countries for its sign-in form, and the session."""
+        """What the app itself shows: the devices for the card's dropdown
+        and the session."""
         devices = [{k: d.info[k] for k in ("key", "did", "name", "prefix",
                                             "area")}
                    for d in self.devices.values()]
-        return {"devices": devices,
-                "countries": [[code, name] for code, name, _a in COUNTRIES],
-                **self.session_info()}
+        return {"devices": devices, **self.session_info()}
 
     def _live_out(self, did, message):
         """One live message, from the tracker's publish thread. It goes to

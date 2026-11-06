@@ -2,11 +2,61 @@
   "config": {
     "step": {
       "user": {
-        "description": "Aqara FP2 Companion trova da solo ogni Aqara FP2 associato tramite HomeKit Device. Una volta configurato, accedi ad Aqara dalla card Aqara FP2 Companion.\n\nSe è ancora installata l'app AppDaemon di Aqara FP2 Companion, rimuovila prima: le due non devono condividere la sessione Aqara."
+        "title": "Accedi ad Aqara",
+        "description": "Aqara FP2 Companion trova da solo ogni FP2 associato tramite HomeKit Device. Accedi con l'account Aqara che li contiene.\n\nSe è ancora installata l'app AppDaemon di Aqara FP2 Companion, rimuovila prima: le due non devono condividere la sessione Aqara.",
+        "data": {
+          "account": "Account Aqara",
+          "password": "Password",
+          "country": "Paese o regione",
+          "app_identity": "Credenziali personalizzate dell'app Aqara"
+        },
+        "data_description": {
+          "account": "L'email o il numero di telefono con cui accedi all'app Aqara.",
+          "password": "Usata una sola volta per l'accesso. Viene conservata solo la sessione, mai la password.",
+          "country": "Quello scelto nell'app Aqara. Decide quali server Aqara ospitano l'account.",
+          "app_identity": "Solo per un account nella regione Cina, nella forma app_id:app_key. Altrimenti lascia vuoto."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Accedi di nuovo ad Aqara",
+        "description": "Aqara ha chiuso la sessione, quindi le impostazioni e le zone degli FP2 non possono essere lette né modificate. Accedi di nuovo.",
+        "data": {
+          "account": "Account Aqara",
+          "password": "Password",
+          "country": "Paese o regione"
+        },
+        "data_description": {
+          "account": "L'email o il numero di telefono con cui accedi all'app Aqara.",
+          "password": "Usata una sola volta per l'accesso. Viene conservata solo la sessione, mai la password.",
+          "country": "Quello scelto nell'app Aqara. Decide quali server Aqara ospitano l'account."
+        }
+      },
+      "reconfigure": {
+        "title": "Cambia l'account Aqara",
+        "description": "Accedi di nuovo, con lo stesso account o con un altro.",
+        "data": {
+          "account": "Account Aqara",
+          "password": "Password",
+          "country": "Paese o regione"
+        },
+        "data_description": {
+          "account": "L'email o il numero di telefono con cui accedi all'app Aqara.",
+          "password": "Usata una sola volta per l'accesso. Viene conservata solo la sessione, mai la password.",
+          "country": "Quello scelto nell'app Aqara. Decide quali server Aqara ospitano l'account."
+        }
       }
     },
+    "error": {
+      "invalid_auth": "Aqara ha rifiutato l'account o la password.",
+      "cannot_connect": "Impossibile raggiungere i server Aqara.",
+      "invalid_identity_region": "Questa regione richiede credenziali personalizzate dell'app. Aggiungile nel primo modulo, o nelle opzioni per un nuovo accesso.",
+      "invalid_identity": "Usa la forma app_id:app_key.",
+      "unknown": "Qualcosa è andato storto. Il log contiene i dettagli."
+    },
     "abort": {
-      "single_instance_allowed": "Aqara FP2 Companion è già configurato. Una sola voce serve tutti gli FP2."
+      "single_instance_allowed": "Aqara FP2 Companion è già configurato. Una sola voce serve tutti gli FP2.",
+      "reauth_successful": "Accesso effettuato di nuovo.",
+      "reconfigure_successful": "Accesso effettuato con il nuovo account."
     }
   },
   "options": {
@@ -83,7 +133,6 @@
           "cloud_error": "Errore del cloud",
           "write_not_applied": "Scrittura non applicata",
           "zone_write_failed": "Scrittura delle zone non riuscita",
-          "login_failed": "Accesso non riuscito",
           "refused": "Rifiutato"
         }
       },

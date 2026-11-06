@@ -184,6 +184,18 @@ class HassFp2Companion(Fp2Companion):
         """A device's state changed, or the app's own when `key` is None."""
         dispatcher_send(self.hass, signal_changed(self.entry_id, key))
 
+    def signed_out(self) -> None:
+        """The Aqara session is gone: Home Assistant asks for a sign-in."""
+        self.hass.loop.call_soon_threadsafe(self._start_reauth)
+
+    @callback
+    def _start_reauth(self) -> None:
+        if self._stopping:
+            return
+        entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        if entry is not None:
+            entry.async_start_reauth(self.hass)
+
     def live(self, key: str, message: dict[str, Any]) -> None:
         """One live position message, for the cards watching `key`."""
         self.hass.loop.call_soon_threadsafe(self._deliver_live, key, message)

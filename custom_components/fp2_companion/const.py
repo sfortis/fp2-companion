@@ -8,6 +8,12 @@ CONF_EXCLUDE = "exclude"
 CONF_BACKUPS_KEEP = "backups_keep"
 CONF_TOKEN_CHECK_TIME = "token_check_time"
 CONF_APP_IDENTITIES = "app_identities"
+# The Aqara account, in the entry's data; the password is never stored.
+CONF_ACCOUNT = "account"
+CONF_COUNTRY = "country"
+# Only in the first form: an app identity pair for a China region account,
+# which goes to the options.
+CONF_APP_IDENTITY = "app_identity"
 # Only in the options form: empties the stored pairs, and is not stored.
 CONF_CLEAR_APP_IDENTITIES = "clear_app_identities"
 

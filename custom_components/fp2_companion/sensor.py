@@ -96,12 +96,11 @@ class CloudStatusSensor(Fp2Entity, SensorEntity):
 
 
 class DevicesSensor(Fp2HubEntity, SensorEntity):
-    """The FP2s the app serves, for the card's dropdown, with the countries
-    of its sign-in form and the session."""
+    """The FP2s the app serves, for the card's dropdown, and the session."""
 
     _attr_translation_key = "devices"
     _unrecorded_attributes = frozenset(
-        {"devices", "countries", "account", "country", "token_expires"}
+        {"devices", "account", "country", "token_expires"}
     )
 
     @property
@@ -111,5 +110,5 @@ class DevicesSensor(Fp2HubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """The devices, the countries and the session."""
+        """The devices and the session."""
         return self._app.hub_attrs

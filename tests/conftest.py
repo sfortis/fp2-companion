@@ -42,6 +42,7 @@ class World:
         self.added = []      # device keys, in the order they were announced
         self.changes = []    # device keys that changed; None for the app
         self.live = []       # (device key, message)
+        self.signed_out = 0  # how often the app said the session is gone
         self.logs = []
 
     def added_device(self, device):
@@ -52,6 +53,9 @@ class World:
 
     def live_message(self, key, message):
         self.live.append((key, message))
+
+    def session_gone(self):
+        self.signed_out += 1
 
     def log(self, *a, **k):
         self.logs.append(" ".join(str(x) for x in a))
@@ -83,3 +87,4 @@ def _bind(app, world):
         setattr(app, name, getattr(world, name))
     app.added = world.added_device
     app.live = world.live_message
+    app.signed_out = world.session_gone
