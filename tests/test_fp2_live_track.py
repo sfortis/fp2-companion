@@ -549,6 +549,8 @@ def test_the_retry_pause_ticks_until_its_delay_has_passed(monkeypatch):
     monkeypatch.setattr(live_track.asyncio, "sleep", sleep)
     run(t)
     assert sleeps == [0.001, 0.001, 0.001]
+    # One pause covered all three ticks: the socket was asked for only once.
+    assert kinds(cloud) == ["push_socket"]
     assert (DID, {"state": LIVE_RETRYING, "reason": "code 500",
                   "code": 500}) in published
 

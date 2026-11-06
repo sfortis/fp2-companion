@@ -13,7 +13,7 @@ import os
 import shutil
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
@@ -128,8 +128,8 @@ async def async_unload_entry(
 async def async_remove_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> None:
-    """Take the repair with the entry, and sign out: a removed integration
-    leaves no valid Aqara token behind, in the config folder or a backup."""
+    """Take the repair with the entry, and forget the Aqara token, so the
+    config folder and the backups taken from now on hold none."""
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
     try:
         await hass.async_add_executor_job(sign_out, hass.config.path(STATE_DIR))
@@ -141,10 +141,12 @@ async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry, device: dr.DeviceEntry
 ) -> bool:
     """A person may remove the settings device of an FP2 this integration
-    no longer serves (gone from HomeKit, excluded, or off the account), but
-    not one it serves or the integration's own."""
-    app = entry.runtime_data
-    served = {d.info["did"] for d in app.devices.values()}
+    has not served since it last started (gone from HomeKit Device, or
+    excluded in the options), but not one it serves or its own."""
+    app = getattr(entry, "runtime_data", None)
+    if app is None or entry.state is not ConfigEntryState.LOADED:
+        return False
+    served = {d.info["did"] for d in list(app.devices.values())}
     ids = {ident for domain, ident in device.identifiers if domain == DOMAIN}
     return bool(ids) and entry.entry_id not in ids and not ids & served
 

@@ -73,6 +73,10 @@ APPROACH_LABELS = {"0": "Far", "1": "Middle", "2": "Close"}
 # every readback it made after that matched.
 WRITE_SETTLE_SECONDS = 3
 DISCOVERY_RETRY_SECONDS = 60
+# After a failed cloud call the device is read again after these delays,
+# then every last one, until the cloud answers. Nothing else polls, so
+# without it the settings would stay unavailable until Refresh.
+READ_RETRY_SECONDS = (60, 300, 900)
 BACKUPS_SHOWN = 20
 
 # The status sensor's state. A consumer decides on these codes and never on
@@ -200,6 +204,11 @@ class Fp2Device:
         self.learning_until = None
         self.status = STATUS_STARTING
         self.status_detail = None
+        # Whether the cloud answered the last call. Kept apart from the
+        # status, which a refused command also sets without asking the cloud.
+        self.cloud_ok = True
+        self._retries = 0
+        self._retry_pending = False
         self._snapshot()
 
     # ------------------------------------------------------------ commands
@@ -260,6 +269,7 @@ class Fp2Device:
             except AqaraError as exc:
                 if exc.code in CODES_NOT_ON_ACCOUNT:
                     self.values = {}
+                    self.cloud_ok = True
                     self.app.log(f"{self.info['name']} is not on the "
                                  "signed-in account", level="WARNING")
                     self._set_status(STATUS_NOT_ON_ACCOUNT)
@@ -270,10 +280,25 @@ class Fp2Device:
         self.zones = zones
         self.last_read = self.app._now()
         self._backup_if_changed(zones)
-        if self.status == STATUS_CLOUD_ERROR:
+        if not self.cloud_ok:
             self.app.log(f"{self.info['name']}: the Aqara cloud answers again")
+        self.cloud_ok = True
+        self._retries = 0
         self._set_status(STATUS_OK)
         return True
+
+    def _retry_read(self, kwargs=None):
+        self._retry_pending = False
+        if not self.cloud_ok:
+            self.read_all()
+
+    def _schedule_retry(self):
+        if self._retry_pending:
+            return
+        delay = READ_RETRY_SECONDS[min(self._retries, len(READ_RETRY_SECONDS) - 1)]
+        self._retries += 1
+        self._retry_pending = True
+        self.app.run_in(self._retry_read, delay)
 
     def _read_tags(self):
         """Fill the app's zone type catalogue. A failure here leaves the old
@@ -629,15 +654,20 @@ class Fp2Device:
     def _cloud_failed(self, exc):
         self.last_error = {"endpoint": exc.endpoint, "code": exc.code,
                            "message": exc.message, "at": self.app._now()}
+        if isinstance(exc, AqaraAuthError):
+            if self.status != STATUS_NO_SESSION:
+                self.app.log(f"{self.info['name']}: cloud call failed: {exc}",
+                             level="WARNING")
+            self.app.session_lost()
+            return
         # Once when the cloud is lost, not on every call while it stays
         # lost; the recovery is logged once by read_all.
-        if self.status not in (STATUS_CLOUD_ERROR, STATUS_NO_SESSION):
+        if self.cloud_ok:
             self.app.log(f"{self.info['name']}: cloud call failed: {exc}",
                          level="WARNING")
-        if isinstance(exc, AqaraAuthError):
-            self.app.session_lost()
-        else:
-            self._set_status(STATUS_CLOUD_ERROR)
+        self.cloud_ok = False
+        self._set_status(STATUS_CLOUD_ERROR)
+        self._schedule_retry()
 
     # ------------------------------------------------------------- state
     # What the entities show. They read it on Home Assistant's event loop
@@ -663,8 +693,9 @@ class Fp2Device:
     def reachable(self):
         """Whether the settings can be read and written now: a session, the
         device on the account, and a cloud that answered the last call."""
-        return bool(self.values) and self.status not in (
-            STATUS_NO_SESSION, STATUS_NOT_ON_ACCOUNT, STATUS_CLOUD_ERROR)
+        return (bool(self.values) and self.cloud_ok
+                and self.status not in (STATUS_NO_SESSION,
+                                        STATUS_NOT_ON_ACCOUNT))
 
     @property
     def sensitivity(self):

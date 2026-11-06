@@ -1332,7 +1332,9 @@ def test_a_write_the_cloud_fails_is_reported_and_not_read_back(fp2):
     cmd(app, "ai_detection", "on")
     assert status(world) == "cloud_error"
     assert attrs(world)["last_error"]["endpoint"] == "res/write"
-    assert len(world.timers) == timers
+    # No readback of the write; only the read that waits for the cloud.
+    assert [(x["callback"], x["delay"]) for x in world.timers[timers:]] == [
+        (dev(world)._retry_read, 60)]
 
 
 def test_a_readback_that_cannot_read_does_not_judge_the_write(fp2):
@@ -1393,7 +1395,9 @@ def test_a_zone_write_that_fails_is_reported_and_not_read_back(fp2, error,
     app.cloud_fake.set_zone = raises(error)
     cmd(app, "zone_set", json.dumps({"rangeId": 3, "name": "Sofa"}))
     assert status(world) == shown
-    assert len(world.timers) == timers
+    # No readback of the write; a cloud failure only waits for the cloud.
+    added = [x["callback"] for x in world.timers[timers:]]
+    assert added == ([dev(world)._retry_read] if shown == "cloud_error" else [])
 
 
 def test_the_edge_becomes_a_detection_zone_of_the_type_the_card_chose(fp2):
@@ -1443,10 +1447,14 @@ def test_a_restore_the_cloud_fails_partway_is_read_back(fp2):
     app, world = fp2()
     app.start()
     first = zone_attrs(world)["backups"][0]["name"]
+    # The plan rewrites the couch, then deletes the desk; the delete fails
+    # after the rewrite went out, so the device is read back as it now is.
+    app.cloud_fake.zones[0] = dict(app.cloud_fake.zones[0], sensitivity=3)
     app.cloud_fake.zones.append(zone(4, "Desk", 0, 1, [15, 16]))
     app.cloud_fake.delete_zones = raises(
         AqaraError("devex/radar/range/delete", None, "timeout"))
     cmd(app, "restore", first)
+    assert app.cloud_fake.zone_writes
     assert status(world) == "cloud_error"
     assert world.timers[-1]["callback"] == app.devices[KEY].read_all
 
@@ -1466,3 +1474,34 @@ def test_a_token_check_without_a_session_asks_for_a_sign_in(fp2):
     assert status(world) == "no_session"
     assert world.signed_out == 1
     assert any("token check failed" in line for line in world.logs)
+
+
+def test_a_failed_read_is_tried_again_later_until_the_cloud_answers(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    retries = [x for x in world.timers if x["callback"] == dev(world)._retry_read]
+    assert [x["delay"] for x in retries] == [60]
+    cmd(app, "refresh")                 # a pending retry is not doubled
+    assert len([x for x in world.timers
+                if x["callback"] == dev(world)._retry_read]) == 1
+    retries[0]["callback"](retries[0]["kwargs"])
+    assert [x["delay"] for x in world.timers
+            if x["callback"] == dev(world)._retry_read] == [60, 300]
+    app.cloud_fake.fail = None
+    last = world.timers[-1]
+    last["callback"](last["kwargs"])
+    assert dev(world).reachable is True
+    assert status(world) == "ok"
+
+
+def test_a_refused_command_does_not_hide_a_lost_cloud(fp2):
+    app, world = fp2()
+    app.cloud_fake.values.update({"4.72.85": "1", "14.1.85": "3"})
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    cmd(app, "sensitivity", "Low")      # refused without asking the cloud
+    assert status(world) == "refused"
+    assert dev(world).reachable is False

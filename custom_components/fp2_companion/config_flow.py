@@ -227,13 +227,15 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
             identities = parse_identities(entry.options.get(CONF_APP_IDENTITIES, []))
             errors = await self._async_sign_in(user_input, identities, entry)
             if not errors:
-                # The entry's update listener reloads it when the data
-                # changes; the same account signed in again changes nothing,
-                # so that reload is asked for here.
+                # A loaded entry's update listener reloads it when the data
+                # changes. The same account signed in again changes nothing,
+                # and an entry whose setup failed has no listener, so in both
+                # cases the reload is asked for here.
+                loaded = entry.state is ConfigEntryState.LOADED
                 changed = self.hass.config_entries.async_update_entry(
                     entry, data={**entry.data, **_account_data(user_input)}
                 )
-                if not changed:
+                if not changed or not loaded:
                     self.hass.config_entries.async_schedule_reload(entry.entry_id)
                 return self.async_abort(
                     reason="reauth_successful"

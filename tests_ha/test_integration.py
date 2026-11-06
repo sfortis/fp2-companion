@@ -408,6 +408,7 @@ async def show_zones(hass, entry, zone_list) -> None:
         device.values = {"14.1.85": "2", "14.47.85": "0", "4.72.85": "0"}
         device.zones = zone_list
         device.last_read = time.time()
+        device.cloud_ok = True
         device._set_status("ok")
 
     await run(hass, entry, read)
@@ -881,18 +882,23 @@ async def test_diagnostics_leave_out_the_account_and_the_serials(
 
     hass.config_entries.async_update_entry(
         entry, data={"account": "a@example.com", "country": "GR"},
-        options={"app_identities": ["id:key"]})
+        options={"app_identities": ["id:key"], "devices": ["54EF44D4E5F6"],
+                 "exclude": ["54EF44D4E5F6"]})
     # The update reloads the entry, and the app looks for the FP2s 5 s on.
     await hass.async_block_till_done()
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
     await wait_for_worker(hass, entry)
+    device = entry.runtime_data.devices[KEY]
+    await run(hass, entry, device.restore, "zones-20990101T000000.json")
     diag = await async_get_config_entry_diagnostics(hass, entry)
     text = json.dumps(diag)
-    for secret in ("a@example.com", "id:key", "54ef44a1b2c3", "j.walker"):
+    for secret in ("a@example.com", "id:key", "54ef44a1b2c3", "54ef44d4e5f6",
+                   "j.walker", "living room", ".storage"):
         assert secret not in text.lower(), secret
+    assert diag["devices"][0]["status_detail"] in (None, {"code": None})
     assert diag["entry"]["data"]["country"] == "GR"
     assert diag["session"]["signed_in"] is True
-    assert diag["devices"][0]["status"] == "cloud_error"
+    assert diag["devices"][0]["status"] == "refused"
 
 
 async def test_an_fp2_paired_after_setup_is_served_without_a_reload(
@@ -1244,3 +1250,56 @@ def test_removing_a_pending_cleanup_that_is_gone_is_not_an_error(tmp_path) -> No
     from custom_components.fp2_companion import migrate
 
     migrate._remove_pending(str(tmp_path / "mqtt_cleanup_pending.json"))
+
+
+
+async def test_diagnostics_of_an_entry_that_did_not_start(hass, fp2_device) -> None:
+    from custom_components.fp2_companion.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = MockConfigEntry(domain=DOMAIN, data={"account": "a@example.com",
+                                                 "country": "GR"})
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag == {"entry": {"data": {"account": "**REDACTED**", "country": "GR"},
+                              "options": {}, "state": "setup_error"}}
+    gone = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "lumi1.54ef44d4e5f6")}, name="Old FP2 Settings")
+    assert not await integration.async_remove_config_entry_device(hass, entry, gone)
+
+
+async def test_a_reauth_after_a_failed_setup_starts_the_integration(
+        hass, fp2_device, signed_in) -> None:
+    from conftest import write_session
+
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    flow = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
+    # The fake sign-in writes no session; the real one does.
+    await hass.async_add_executor_job(write_session, hass)
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], SIGN_IN)
+    assert result["reason"] == "reauth_successful"
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_excluded_fp2_paired_later_starts_no_rescan(
+        hass, fp2_device, session) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, options={"exclude": ["54EF44D4E5F6"]})
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    homekit_entry = hass.config_entries.async_entries("homekit_controller")[0]
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=homekit_entry.entry_id,
+        identifiers={("homekit_controller", "2")},
+        manufacturer="Aqara", model="PS-S02D", serial_number="54EF44D4E5F6",
+        name="Presence-Sensor-FP2-E5F6")
+    await hass.async_block_till_done()
+    assert entry.runtime_data._rescan is None
+    assert await hass.config_entries.async_unload(entry.entry_id)

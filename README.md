@@ -149,9 +149,11 @@ them; the status, the zones and Refresh stay available.
 
 ## How Data Is Updated
 
-The integration never polls the cloud. It reads the settings and the zones
-when it starts, a few seconds after every write to check that the write
-landed, and when Refresh is pressed. A change made in the Aqara app
+The integration does not poll the cloud. It reads the settings and the
+zones when it starts, a few seconds after every write to check that the
+write landed, and when Refresh is pressed. After a failed call it reads
+again after 1 minute, 5 minutes and then every 15 minutes, until the cloud
+answers. A change made in the Aqara app
 therefore shows only after Refresh or a restart. The Aqara token is checked
 once a day at the time set in the options, and it is renewed when fewer than
 three days remain. The live positions come over a push socket that is open
@@ -228,8 +230,9 @@ folder only where HACS put it; a copy made by hand into
 | What you see | What to do |
 |---|---|
 | A notification asks you to sign in again | Aqara ended the session. Open it and enter the password. |
-| The cloud status is `cloud_error` and the settings are unavailable | The Aqara servers did not answer. Press Refresh once they are reachable; the log says when the cloud is lost and when it answers again. |
-| The cloud status is `write_not_applied` after a sensitivity change | AI person detection is on, and the FP2 ignores a written sensitivity while it is on. Turn it off first. |
+| The cloud status is `cloud_error` and the settings are unavailable | The Aqara servers did not answer. The integration tries again by itself, and Refresh tries at once; the log says when the cloud is lost and when it answers again. |
+| The cloud status is `refused` with the code `ai_mode_on` | AI person detection is on, and the FP2 sets its own sensitivity while it is on. Turn it off first. |
+| The cloud status is `write_not_applied` after a sensitivity change | AI person detection was turned on in the Aqara app since the last read, and the FP2 ignored the write. Press Refresh, then turn it off. |
 | The cloud status is `not_on_account` | The FP2 is on another Aqara account. Sign in with that account, or exclude the FP2 in the options. |
 | The card says "Live view needs an admin user" | The live view, the zone editor and restores need an admin Home Assistant user. |
 | The card shows no live dots after an update | The browser runs the old card from its cache. Reload the page without the cache, or clear the cache of the Home Assistant app. |
@@ -270,8 +273,11 @@ are left out of it.
 ## Removal
 
 1. In **Settings > Devices & services > Aqara FP2 Companion**, choose
-   **Delete** from the menu. The integration signs out of Aqara as it goes,
-   so no valid token is left behind.
+   **Delete** from the menu. The integration removes the Aqara token from
+   its session file as it goes. No sign-out request to Aqara is known, so the
+   token itself stays valid until it expires, at most a month later, and a Home
+   Assistant backup taken before the removal still holds it. Change the
+   Aqara password if that backup may reach someone else.
 2. Remove the card from your dashboards, and remove **FP2 Companion Card**
    in HACS.
 3. Remove **Aqara FP2 Companion** in HACS, or delete

@@ -188,7 +188,9 @@ not depend on the cloud.
     session. A lost session starts the reauth flow, Reconfigure changes the
     account, and a sign-in while the integration runs goes through the
     app's worker under its cloud lock, so it cannot interleave with a token
-    refresh. Removing the integration signs out and keeps the PhoneId.
+    refresh. Removing the integration removes the token from the session
+    file and keeps the PhoneId; no sign-out request to Aqara is known, so
+    the token stays valid on Aqara's side until it expires.
     The card no longer signs in or encrypts anything.
 
 ## Modules
@@ -221,7 +223,7 @@ import Home Assistant.
 - `entity.py`, `select.py`, `switch.py`, `button.py` and `sensor.py` are the
   native entities. `websocket_api.py` holds the card's commands and the
   live subscription. `migrate.py` moves the MQTT entities of 1.4.x over.
-- `auth.py` signs in for the config flow and signs out on removal.
+- `auth.py` signs in for the config flow and forgets the token on removal.
   `config_flow.py` holds the sign-in, the reauth, the reconfigure and the
   options. `diagnostics.py` redacts the account and the FP2s' identities.
 - `__init__.py` sets the integration up: it waits while the AppDaemon app is

@@ -29,7 +29,7 @@ from homeassistant.helpers.event import (
 from homeassistant.util.async_ import run_callback_threadsafe
 
 from .aqara_cloud import did_from_serial
-from .companion import Fp2Companion
+from .companion import Fp2Companion, parse_discovery
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -94,10 +94,12 @@ class HassFp2Companion(Fp2Companion):
             return
         if not self._is_homekit(device):
             return
-        try:
-            did = did_from_serial(device.serial_number)
-        except ValueError:
+        # Only an FP2 model, and not one excluded in the options.
+        row = {"serial": device.serial_number, "model": device.model,
+               "original": device.name, "name": device.name}
+        if not parse_discovery([row], (), self._exclude):
             return
+        did = did_from_serial(device.serial_number)
         if any(d.info["did"] == did for d in list(self.devices.values())):
             return
         if self._rescan is None:
