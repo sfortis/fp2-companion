@@ -13,28 +13,30 @@
   "options": {
     "step": {
       "init": {
+        "title": "FP2 Companion settings",
+        "description": "FP2s paired through HomeKit are found automatically. Change these only if you need to.",
         "data": {
-          "devices": "FP2s not paired through HomeKit",
-          "exclude": "FP2s to leave alone",
-          "backups_keep": "Zone backups to keep per FP2",
-          "token_check_time": "Daily token check",
-          "app_identities": "Extra Aqara app identities",
-          "clear_app_identities": "Remove the stored app identities"
+          "devices": "Add FP2s manually by serial",
+          "exclude": "Exclude FP2s by serial",
+          "backups_keep": "Zone backups to keep per device",
+          "token_check_time": "Token refresh schedule",
+          "app_identities": "Custom Aqara app credentials",
+          "clear_app_identities": "Delete saved credentials"
         },
         "data_description": {
-          "devices": "The serial of each FP2, as 54EF44A1B2C3.",
-          "exclude": "The serial of each FP2 this integration should not serve.",
-          "backups_keep": "A backup is written whenever the zones change and before every zone write.",
-          "token_check_time": "The token is refreshed at this time when fewer than three days remain.",
-          "app_identities": "Optional, as app_id:app_key. Tried after the built-in identity of the region. The stored pairs are never shown: leave this empty to keep them, or enter new ones to replace them.",
-          "clear_app_identities": "Tick to delete every stored pair."
+          "devices": "For FP2s that aren't paired through HomeKit. One serial per field, like 54EF44A1B2C3.",
+          "exclude": "These FP2s are ignored, even if HomeKit finds them. One serial per field, like 54EF44A1B2C3.",
+          "backups_keep": "A backup is saved when the zones change and before every zone write. Older ones are deleted.",
+          "token_check_time": "The Aqara token is checked every day at this time and refreshed if it expires within 3 days.",
+          "app_identities": "Optional, as app_id:app_key. Saved credentials aren't shown. Leave this empty to keep them, or enter new ones to replace them.",
+          "clear_app_identities": "Removes all saved app credentials."
         }
       }
     },
     "error": {
-      "invalid_serial": "Every entry must be a 12-character FP2 serial, as 54EF44A1B2C3.",
-      "invalid_identity": "Every entry must be app_id:app_key.",
-      "clear_and_replace": "Either remove the stored pairs or enter new ones, not both."
+      "invalid_serial": "A serial is 12 characters, like 54EF44A1B2C3.",
+      "invalid_identity": "Use the format app_id:app_key.",
+      "clear_and_replace": "Either delete the saved credentials or enter new ones, not both."
     }
   },
   "issues": {
