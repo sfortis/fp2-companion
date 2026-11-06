@@ -245,7 +245,6 @@ def cmd(app, key, payload="", device=KEY):
         "zone_set": lambda: d.zone_set(_json(payload)),
         "zone_delete": lambda: d.zone_delete(payload),
         "restore": lambda: d.restore(payload),
-        "preview": lambda: d.show_preview(payload),
     }
     calls[key]()
 
@@ -267,10 +266,6 @@ def status(world, key=KEY):
 def zone_attrs(world):
     """What the zones sensor shows, as the worker built it last."""
     return dev(world).zones_attrs
-
-
-def preview_name(world):
-    return (dev(world).preview or {}).get("name")
 
 
 # ----------------------------------------------------------------- startup
@@ -938,22 +933,8 @@ def test_a_restore_name_cannot_reach_another_file(fp2):
     assert status(world) == "refused"
 
 
-def test_a_backup_can_be_previewed_before_a_restore(fp2):
-    app, world = fp2()
-    app.start()
-    name = zone_attrs(world)["backups"][0]["name"]
-    cmd(app, "preview", name)
-    assert preview_name(world) == name
-    attrs = dev(world).preview
-    assert [z["rangeId"] for z in attrs["zones"]] == [3, 1, 101]
 
 
-def test_a_preview_of_no_backup_is_refused(fp2):
-    app, world = fp2()
-    app.start()
-    cmd(app, "preview", "../session.json")
-    assert status(world) == "refused"
-    assert preview_name(world) is None
 
 
 # -------------------------------------------------------------- signing in

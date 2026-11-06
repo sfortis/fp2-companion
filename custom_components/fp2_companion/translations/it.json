@@ -73,9 +73,6 @@
       "zones": {
         "name": "Zone"
       },
-      "backup_preview": {
-        "name": "Anteprima backup"
-      },
       "cloud_status": {
         "name": "Stato cloud",
         "state": {

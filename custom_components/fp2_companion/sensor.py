@@ -1,5 +1,5 @@
-"""The zones and backups the card draws, a backup's preview, the cloud
-status of each FP2, and the app's own list of devices."""
+"""The zones and backups the card draws, the cloud status of each FP2, and
+the app's own list of devices."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ async def async_setup_entry(
             async_add_entities,
             lambda device: [
                 ZonesSensor(app, device),
-                BackupPreviewSensor(app, device),
                 CloudStatusSensor(app, device),
             ],
         )
@@ -65,31 +64,6 @@ class ZonesSensor(Fp2Entity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """What the card draws."""
         return self._device.zones_attrs
-
-
-class BackupPreviewSensor(Fp2Entity, SensorEntity):
-    """The backup the card asked to preview, with its zones. A sensor of its
-    own, because the zones of every backup together would pass the 16 KB
-    Home Assistant keeps per entity."""
-
-    _attr_translation_key = "backup_preview"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _unrecorded_attributes = frozenset({"zones"})
-
-    def __init__(self, app: HassFp2Companion, device: Fp2Device) -> None:
-        """Set up the sensor."""
-        super().__init__(app, device, "sensor", "backup_preview")
-
-    @property
-    def native_value(self) -> str | None:
-        """The backup's name."""
-        preview = self._device.preview
-        return preview["name"] if preview else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """The backup's zones and when it was saved."""
-        return self._device.preview
 
 
 class CloudStatusSensor(Fp2Entity, SensorEntity):

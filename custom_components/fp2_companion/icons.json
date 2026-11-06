@@ -28,9 +28,6 @@
       "zones": {
         "default": "mdi:floor-plan"
       },
-      "backup_preview": {
-        "default": "mdi:file-restore"
-      },
       "cloud_status": {
         "default": "mdi:cloud-check",
         "state": {

@@ -41,6 +41,9 @@ RETAINED_WAIT = 2
 # the discovery topics to clear, so a broker that was down is cleared on a
 # later start. Without it the old MQTT entities would come back.
 CLEANUP_PENDING = "mqtt_cleanup_pending.json"
+# Entities the integration no longer has, by the end of their unique id. The
+# backup preview became the answer to the card's command (decision 27).
+RETIRED = ("_backup_preview",)
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ async def async_migrate_mqtt_entities(hass: HomeAssistant, entry: ConfigEntry) -
         for k in kept:
             _recreate(registry, entry, k)
         _LOGGER.info("Moved %s MQTT entities of FP2 Companion to native ones", len(kept))
+    _remove_retired(registry, entry)
     removed = _remove_mqtt_devices(hass)
     if old or removed:
         discovery = [f"{k.domain}/{k.unique_id}/config" for k in kept] if old else []
@@ -142,7 +146,15 @@ async def _async_states_gone(hass: HomeAssistant, entity_ids: list[str]) -> None
 
 
 @callback
+def _remove_retired(registry: er.EntityRegistry, entry: ConfigEntry) -> None:
+    for e in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if e.unique_id.endswith(RETIRED):
+            registry.async_remove(e.entity_id)
+
+
 def _recreate(registry: er.EntityRegistry, entry: ConfigEntry, k: _Kept) -> None:
+    if k.unique_id.endswith(RETIRED):
+        return
     if registry.async_get_entity_id(k.domain, DOMAIN, k.unique_id) is not None:
         # The native entity exists already: this MQTT one is a duplicate an
         # uncleared broker brought back, and removing it was all there was

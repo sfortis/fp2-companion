@@ -6,7 +6,9 @@ an MQTT subscription. Every command here requires an admin user: a zone
 write, a restore or a sign-in changes the FP2 and the Aqara account.
 
 A command is queued on the app's worker and answered at once; what it came
-to shows on the device's cloud status sensor, as before.
+to shows on the device's cloud status sensor, as before. A backup preview is
+the exception: it is answered with the backup itself, since nothing about
+it needs to stay on an entity.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
+from .zone_model import read_backup
 
 if TYPE_CHECKING:
     from .companion import Fp2Device
@@ -32,6 +35,7 @@ LEASE_RENEW = timedelta(seconds=30)
 
 ERR_NOT_LOADED = "not_loaded"
 ERR_UNKNOWN_DEVICE = "unknown_device"
+ERR_NO_BACKUP = "no_backup"
 
 # What the card sends for a zone. The app takes only these fields and reads
 # everything else from the zone as the cloud holds it.
@@ -135,15 +139,31 @@ def ws_zone_delete(
         vol.Required("name"): BACKUP_NAME,
     }
 )
-@callback
-def ws_backup_preview(
+@websocket_api.async_response
+async def ws_backup_preview(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Show one backup's zones on the device's backup preview sensor."""
-    if found := _device(hass, connection, msg):
-        app, device = found
-        app.submit(device.show_preview, msg["name"])
-        connection.send_result(msg["id"])
+    """One backup's zones, so the card can draw them before a restore."""
+    found = _device(hass, connection, msg)
+    if found is None:
+        return
+    device = found[1]
+    try:
+        body = await hass.async_add_executor_job(
+            read_backup, device.info["backup_dir"], msg["name"]
+        )
+    except (OSError, ValueError):
+        connection.send_error(msg["id"], ERR_NO_BACKUP, f"No backup {msg['name']}")
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "name": msg["name"],
+            "saved_at": body.get("saved_at"),
+            "reason": body.get("reason"),
+            "zones": body.get("zones", []),
+        },
+    )
 
 
 @websocket_api.require_admin

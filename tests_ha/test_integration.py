@@ -108,7 +108,6 @@ async def test_the_entities_sit_on_a_settings_device(
                       f"button.{PREFIX}_refresh",
                       f"button.{PREFIX}_ai_learning",
                       f"sensor.{PREFIX}_zones",
-                      f"sensor.{PREFIX}_backup_preview",
                       f"sensor.{PREFIX}_cloud_status"):
         reg = registry.async_get(entity_id)
         assert reg is not None, entity_id
@@ -129,7 +128,7 @@ async def test_the_entities_sit_on_a_settings_device(
 
 async def test_a_command_reaches_the_app(hass, entry) -> None:
     device = entry.runtime_data.devices[KEY]
-    await run(hass, entry, device.show_preview, "no-such-backup")
+    await run(hass, entry, device.restore, "no-such-backup")
     assert hass.states.get(f"sensor.{PREFIX}_cloud_status").state == "refused"
 
 
@@ -485,11 +484,50 @@ async def test_the_mqtt_entities_move_with_their_ids_and_settings(
 async def test_a_card_command_reaches_the_device(hass, entry, hass_ws_client) -> None:
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({
-        "type": "fp2_companion/backup/preview", "device": KEY,
+        "type": "fp2_companion/backup/restore", "device": KEY,
         "name": "no-such-backup"})
     assert (await client.receive_json())["success"]
     await wait_for_worker(hass, entry)
     assert hass.states.get(f"sensor.{PREFIX}_cloud_status").state == "refused"
+
+
+async def test_a_preview_answers_with_the_backup(hass, entry, hass_ws_client) -> None:
+    folder = entry.runtime_data.devices[KEY].info["backup_dir"]
+    name = "zones-20261030T090122.json"
+
+    def write():
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name), "w") as fh:
+            json.dump({"saved_at": 1793343682, "reason": "first-read",
+                       "zones": [{"rangeId": 3, "name": "Couch"}]}, fh)
+
+    await hass.async_add_executor_job(write)
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({
+        "type": "fp2_companion/backup/preview", "device": KEY, "name": name})
+    reply = await client.receive_json()
+    assert reply["success"]
+    assert reply["result"] == {"name": name, "saved_at": 1793343682,
+                               "reason": "first-read",
+                               "zones": [{"rangeId": 3, "name": "Couch"}]}
+    # A name that is not a backup reads nothing outside the folder.
+    await client.send_json_auto_id({
+        "type": "fp2_companion/backup/preview", "device": KEY,
+        "name": "../session.json"})
+    reply = await client.receive_json()
+    assert reply["error"]["code"] == "no_backup"
+
+
+async def test_the_retired_preview_sensor_is_removed(hass, fp2_device) -> None:
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, f"{OBJ}_backup_preview",
+        suggested_object_id=f"{PREFIX}_backup_preview", config_entry=entry)
+    await start(hass, entry)
+    assert registry.async_get(f"sensor.{PREFIX}_backup_preview") is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_a_zone_is_checked_before_it_reaches_the_device(

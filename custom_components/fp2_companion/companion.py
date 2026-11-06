@@ -198,7 +198,6 @@ class Fp2Device:
         self.cloud = app._make_cloud(info["did"])
         self.values = {}
         self.zones = []
-        self.preview = None
         self.last_read = None
         self.last_error = None
         self.learning_until = None
@@ -236,9 +235,6 @@ class Fp2Device:
 
     def restore(self, name):
         self._restore(name)
-
-    def show_preview(self, name):
-        self._preview(name)
 
     def track(self, client, on):
         """A card's lease on the live positions. Each browser tab is its own
@@ -597,19 +593,6 @@ class Fp2Device:
         self.app.run_in(self._verify_zone, WRITE_SETTLE_SECONDS,
                     kind=KIND_RESTORE, zone={"backup": name, "zones": target},
                     before=before)
-
-    def _preview(self, name):
-        """Show one backup's zones so the card can draw them before a
-        restore. A sensor of its own, because the zones of every backup
-        together would pass the 16 KB Home Assistant keeps per entity."""
-        try:
-            body = read_backup(self.info["backup_dir"], name)
-        except (OSError, ValueError) as exc:
-            self._refuse(f"backup {name!r}: {exc}")
-            return
-        self.preview = {"name": name, "saved_at": body.get("saved_at"),
-                        "reason": body.get("reason"), "zones": body["zones"]}
-        self._changed()
 
     def _verify_zone(self, kwargs):
         if not self.read_all():
