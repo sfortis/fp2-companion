@@ -325,6 +325,39 @@ async def test_stored_identities_are_not_sent_and_kept_when_empty(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+
+async def test_clearing_and_replacing_identities_at_once_is_refused(
+        hass, mqtt, fp2_device) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, options={"app_identities": ["id:key"]})
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"app_identities": ["a:b"], "clear_app_identities": True})
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"clear_app_identities": "clear_and_replace"}
+    assert entry.options["app_identities"] == ["id:key"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_rejected_submit_keeps_the_typed_identities(
+        hass, mqtt, fp2_device) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, options={"app_identities": ["id:key"]})
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"devices": ["bad"], "app_identities": ["a:b"]})
+    assert result["errors"] == {"devices": "invalid_serial"}
+    field = next(
+        k for k in result["data_schema"].schema if k == "app_identities")
+    assert field.description == {"suggested_value": ["a:b"]}
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 def test_terminate_before_initialize_does_not_fail() -> None:
     from custom_components.fp2_companion.companion import Fp2Companion
 

@@ -103,6 +103,11 @@ class Fp2CompanionOptionsFlow(OptionsFlow):
                 _is_identity(v) for v in user_input.get(CONF_APP_IDENTITIES, [])
             ):
                 errors[CONF_APP_IDENTITIES] = "invalid_identity"
+            # Clearing and replacing at once is ambiguous, so neither happens.
+            if user_input.get(CONF_CLEAR_APP_IDENTITIES) and user_input.get(
+                CONF_APP_IDENTITIES
+            ):
+                errors[CONF_CLEAR_APP_IDENTITIES] = "clear_and_replace"
             if not errors:
                 data = dict(user_input)
                 clear = data.pop(CONF_CLEAR_APP_IDENTITIES, False)
@@ -115,11 +120,16 @@ class Fp2CompanionOptionsFlow(OptionsFlow):
                         self.config_entry.options.get(CONF_APP_IDENTITIES, [])
                     )
                 return self.async_create_entry(data=data)
-        suggested = {
-            key: value
-            for key, value in (user_input or self.config_entry.options).items()
-            if key != CONF_APP_IDENTITIES
-        }
+        if user_input is not None:
+            # A rejected submit shows the form again with what was typed,
+            # pairs included: they came from this browser, not from storage.
+            suggested = user_input
+        else:
+            suggested = {
+                key: value
+                for key, value in self.config_entry.options.items()
+                if key != CONF_APP_IDENTITIES
+            }
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
