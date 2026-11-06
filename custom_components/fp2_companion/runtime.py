@@ -87,6 +87,17 @@ class HassFp2Companion(Fp2Companion):
         # Waits for the worker thread to end, on one of Home Assistant's.
         await self.hass.async_add_executor_job(self._worker.shutdown)
 
+    async def async_call_locked(self, func: Callable[..., Any], *args: Any) -> Any:
+        """Run `func(*args)` on the worker under the cloud lock and return
+        what it returns. A sign-in from the config flow goes through here, so
+        it cannot interleave with the app's own token refresh."""
+
+        def locked() -> Any:
+            with self.lock:
+                return func(*args)
+
+        return await self.hass.loop.run_in_executor(self._worker, locked)
+
     def _guarded(self, func: Callable[..., Any], args: tuple[Any, ...]) -> None:
         """One callback of the app. An error is logged, as AppDaemon did,
         and the next callback runs."""

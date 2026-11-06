@@ -51,7 +51,8 @@
       "cannot_connect": "Impossibile raggiungere i server Aqara.",
       "invalid_identity_region": "Questa regione richiede credenziali personalizzate dell'app. Aggiungile nel primo modulo, o nelle opzioni per un nuovo accesso.",
       "invalid_identity": "Usa la forma app_id:app_key.",
-      "unknown": "Qualcosa è andato storto. Il log contiene i dettagli."
+      "unknown": "Qualcosa è andato storto. Il log contiene i dettagli.",
+      "refused": "Aqara ha rifiutato l'accesso (codice {code}): {message}"
     },
     "abort": {
       "single_instance_allowed": "Aqara FP2 Companion è già configurato. Una sola voce serve tutti gli FP2.",

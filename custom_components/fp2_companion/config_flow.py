@@ -16,6 +16,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -86,8 +87,9 @@ def _sign_in_schema(with_identity: bool) -> vol.Schema:
     """Account, password and country; the first form also takes an app
     identity pair, for a China region account."""
     fields: dict[Any, Any] = {
+        # An Aqara account is an email or a phone number, so plain text.
         vol.Required(CONF_ACCOUNT): TextSelector(
-            TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
+            TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username")
         ),
         vol.Required(CONF_PASSWORD): TextSelector(
             TextSelectorConfig(
@@ -117,20 +119,36 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Start with no Aqara answer to show."""
+        self._placeholders = {"code": "", "message": ""}
+
     async def _async_sign_in(
-        self, user_input: dict[str, Any], identities: list[list[str]]
+        self,
+        user_input: dict[str, Any],
+        identities: list[list[str]],
+        entry: ConfigEntry | None = None,
     ) -> dict[str, str]:
-        """Sign in with what the form holds; the errors for the form."""
+        """Sign in with what the form holds; the errors for the form. While
+        the entry runs, the sign-in goes through its app, under the lock its
+        own token refresh takes."""
+        args = (
+            self.hass.config.path(STATE_DIR),
+            user_input[CONF_ACCOUNT],
+            user_input[CONF_PASSWORD],
+            user_input[CONF_COUNTRY],
+            identities,
+        )
         try:
-            await self.hass.async_add_executor_job(
-                sign_in,
-                self.hass.config.path(STATE_DIR),
-                user_input[CONF_ACCOUNT],
-                user_input[CONF_PASSWORD],
-                user_input[CONF_COUNTRY],
-                identities,
-            )
+            if entry is not None and entry.state is ConfigEntryState.LOADED:
+                await entry.runtime_data.async_call_locked(sign_in, *args)
+            else:
+                await self.hass.async_add_executor_job(sign_in, *args)
         except SignInFailed as exc:
+            self._placeholders = {
+                "code": "" if exc.code is None else str(exc.code),
+                "message": exc.message,
+            }
             return {"base": exc.reason.value}
         except Exception:
             _LOGGER.exception("Unexpected error while signing in to Aqara")
@@ -176,6 +194,7 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
                 _without_password(user_input) or self._defaults(),
             ),
             errors=errors,
+            description_placeholders=self._placeholders,
         )
 
     async def async_step_reauth(
@@ -206,10 +225,20 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             identities = parse_identities(entry.options.get(CONF_APP_IDENTITIES, []))
-            errors = await self._async_sign_in(user_input, identities)
+            errors = await self._async_sign_in(user_input, identities, entry)
             if not errors:
-                return self.async_update_reload_and_abort(
-                    entry, data_updates=_account_data(user_input)
+                # The entry's update listener reloads it when the data
+                # changes; the same account signed in again changes nothing,
+                # so that reload is asked for here.
+                changed = self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, **_account_data(user_input)}
+                )
+                if not changed:
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                return self.async_abort(
+                    reason="reauth_successful"
+                    if step_id == "reauth_confirm"
+                    else "reconfigure_successful"
                 )
         return self.async_show_form(
             step_id=step_id,
@@ -218,6 +247,7 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
                 _without_password(user_input) or self._defaults(entry),
             ),
             errors=errors,
+            description_placeholders=self._placeholders,
         )
 
     @staticmethod

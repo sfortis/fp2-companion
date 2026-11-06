@@ -369,8 +369,6 @@ def test_an_unknown_option_is_refused_and_nothing_is_written(fp2):
     assert status(world) == "refused"
 
 
-
-
 def test_refresh_reads_again(fp2):
     app, world = fp2()
     app.start()
@@ -433,8 +431,6 @@ def test_a_zone_that_went_away_leaves_the_detection_zones(fp2):
                             if z["rangeId"] != 1]
     cmd(app, "refresh")
     assert [z["rangeId"] for z in dev(world).detection_zones()] == [3]
-
-
 
 
 # -------------------------------------------------------------------- zones
@@ -927,10 +923,6 @@ def test_a_restore_name_cannot_reach_another_file(fp2):
     assert status(world) == "refused"
 
 
-
-
-
-
 # -------------------------------------------------------------- signing in
 BLOB = "QkxPQg==" * 20
 
@@ -944,14 +936,6 @@ def test_the_account_is_shown_partly_hidden(fp2):
     app, world = fp2()
     app.start()
     assert attrs(world)["account"] == "j.w*****@example.com"
-
-
-
-
-
-
-
-
 
 
 def test_a_session_from_before_the_card_counts_as_signed_in(fp2):
@@ -1066,8 +1050,6 @@ def test_a_lost_session_reaches_every_device(fp2):
     assert status(world) == "no_session"
     assert dev(world, "54ef44d4e5f6").status == \
         "no_session"
-
-
 
 
 def test_rescan_adds_a_device_that_appeared(fp2):

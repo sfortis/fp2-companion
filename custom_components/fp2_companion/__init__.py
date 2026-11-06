@@ -35,7 +35,7 @@ from .const import (
     ISSUE_APPDAEMON_APP,
     STATE_DIR,
 )
-from .auth import parse_identities
+from .auth import parse_identities, sign_out
 from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
 from .websocket_api import async_setup as async_setup_websocket_api
@@ -116,8 +116,13 @@ async def async_unload_entry(
 async def async_remove_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> None:
-    """Take the repair with the entry."""
+    """Take the repair with the entry, and sign out: a removed integration
+    leaves no valid Aqara token behind, in the config folder or a backup."""
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
+    try:
+        await hass.async_add_executor_job(sign_out, hass.config.path(STATE_DIR))
+    except (OSError, ValueError) as exc:
+        _LOGGER.warning("Could not clear the Aqara session: %s", exc)
 
 
 async def _async_options_updated(
@@ -146,6 +151,9 @@ def _prepare_state(state_dir: str) -> None:
     token would stay valid for weeks, as the refresh happens only three days
     before it expires, and it is the same session."""
     os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    # A folder made by an earlier version, or by the first sign-in, may be
+    # readable by others; it holds the session and the zone backups.
+    os.chmod(state_dir, 0o700)
     marker = os.path.join(state_dir, COPIED_MARKER)
     if os.path.exists(marker) or not os.path.isfile(
         os.path.join(APPDAEMON_STATE_DIR, "session.json")

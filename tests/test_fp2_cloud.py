@@ -613,3 +613,16 @@ def test_a_sign_in_again_keeps_the_previous_country(store):
     t = FakeTransport().reply(result={"token": TOKEN_2, "userId": "user-2"})
     client(store, t).login("a@example.com", encrypted_password=BLOB)
     assert t.requests[0]["url"].startswith("https://aiot-rpc-usa.aqara.com/")
+
+
+def test_a_saved_session_is_private_and_leaves_no_temporary_file(tmp_path):
+    from custom_components.fp2_companion.aqara_cloud import SessionStore
+
+    folder = tmp_path / "state"
+    store = SessionStore(str(folder / "session.json"))
+    store.save({"token": "t"})
+    store.save({"token": "u"})
+    assert (folder.stat().st_mode & 0o777) == 0o700
+    assert ((folder / "session.json").stat().st_mode & 0o777) == 0o600
+    assert sorted(p.name for p in folder.iterdir()) == ["session.json"]
+    assert store.load() == {"token": "u"}

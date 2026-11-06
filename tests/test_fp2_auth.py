@@ -40,7 +40,8 @@ def test_a_sign_in_passes_the_clear_password_once(auth, tmp_path):
 @pytest.mark.parametrize("error, reason", [
     (AqaraError("user/login", None, "timeout"), "cannot_connect"),
     (AqaraError("user/login", 106, "Invalid sign"), "invalid_identity_region"),
-    (AqaraError("user/login", 108, "wrong password"), "invalid_auth"),
+    (AqaraError("user/login", 810, "no such account"), "invalid_auth"),
+    (AqaraError("user/login", 1001, "locked"), "refused"),
     (AqaraAuthError("user/login", 0, "no session"), "invalid_auth"),
     (AqaraRefused("no account"), "invalid_auth"),
 ])
@@ -54,3 +55,28 @@ def test_a_failed_sign_in_says_why(auth, tmp_path, error, reason):
 def test_identities_are_parsed_as_pairs(auth):
     assert auth.parse_identities(["id:key", " a : b ", "nokey", ":x"]) == [
         ["id", "key"], ["a", "b"]]
+
+
+def test_an_unknown_refusal_carries_aqaras_code(auth, tmp_path):
+    FakeCloud.error = AqaraError("user/login", 1001, "account locked")
+    with pytest.raises(auth.SignInFailed) as exc:
+        auth.sign_in(str(tmp_path), "a@example.com", "secret", "GR", [])
+    assert (exc.value.code, exc.value.message) == (1001, "account locked")
+
+
+def test_the_state_folder_is_private(auth, tmp_path):
+    state = tmp_path / "state"
+    auth.sign_in(str(state), "a@example.com", "secret", "GR", [])
+    assert (state.stat().st_mode & 0o777) == 0o700
+
+
+def test_sign_out_forgets_the_token_and_keeps_the_phone(tmp_path):
+    import json
+
+    mod = _load("auth")
+    path = tmp_path / "session.json"
+    path.write_text(json.dumps({"token": "t", "phone_id": "P", "account": "a"}))
+    mod.sign_out(str(tmp_path))
+    kept = json.loads(path.read_text())
+    assert "token" not in kept and kept["phone_id"] == "P"
+    mod.sign_out(str(tmp_path / "missing"))   # nothing there: no error

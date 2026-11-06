@@ -51,7 +51,8 @@
       "cannot_connect": "The Aqara servers could not be reached.",
       "invalid_identity_region": "This region needs custom app credentials. Add them in the first form, or in the options for a sign-in again.",
       "invalid_identity": "Use the format app_id:app_key.",
-      "unknown": "Something went wrong. The log has the details."
+      "unknown": "Something went wrong. The log has the details.",
+      "refused": "Aqara refused the sign-in (code {code}): {message}"
     },
     "abort": {
       "single_instance_allowed": "Aqara FP2 Companion is already set up. One entry serves every FP2.",

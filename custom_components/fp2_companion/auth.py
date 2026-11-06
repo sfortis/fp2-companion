@@ -14,6 +14,7 @@ from enum import StrEnum
 import os
 
 from .aqara_cloud import (
+    CODE_ACCOUNT_UNKNOWN,
     CODE_INVALID_SIGN,
     AqaraAuthError,
     AqaraCloud,
@@ -30,15 +31,21 @@ class SignInError(StrEnum):
     CANNOT_CONNECT = "cannot_connect"
     INVALID_AUTH = "invalid_auth"
     INVALID_IDENTITY = "invalid_identity_region"
+    # Any other answer: the form shows Aqara's code and message.
+    REFUSED = "refused"
 
 
 class SignInFailed(Exception):
     """A sign-in that did not go through."""
 
-    def __init__(self, reason: SignInError) -> None:
-        """Keep the reason the flow shows."""
+    def __init__(
+        self, reason: SignInError, code: int | None = None, message: str = ""
+    ) -> None:
+        """Keep the reason the flow shows, and Aqara's own code."""
         super().__init__(reason.value)
         self.reason = reason
+        self.code = code
+        self.message = message
 
 
 def sign_in(
@@ -51,6 +58,7 @@ def sign_in(
     """Sign in and save the session, or raise SignInFailed. Blocks on the
     network, so it runs in an executor. A failed sign-in leaves the previous
     session file as it was."""
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
     store = SessionStore(os.path.join(state_dir, SESSION_NAME))
     pairs = [tuple(p) for p in identities if len(p) == 2]
     cloud = AqaraCloud(store, None, None, "", identities=pairs)
@@ -65,7 +73,18 @@ def sign_in(
             raise SignInFailed(SignInError.CANNOT_CONNECT) from exc
         if exc.code == CODE_INVALID_SIGN:
             raise SignInFailed(SignInError.INVALID_IDENTITY) from exc
-        raise SignInFailed(SignInError.INVALID_AUTH) from exc
+        if exc.code == CODE_ACCOUNT_UNKNOWN:
+            raise SignInFailed(SignInError.INVALID_AUTH) from exc
+        raise SignInFailed(SignInError.REFUSED, exc.code, exc.message) from exc
+
+
+def sign_out(state_dir: str) -> None:
+    """Forget the token when the integration is removed. The PhoneId stays,
+    so adding it again is the same phone to Aqara and the account does not
+    collect sessions."""
+    path = os.path.join(state_dir, SESSION_NAME)
+    if os.path.isfile(path):
+        AqaraCloud(SessionStore(path), None, None, "").logout()
 
 
 def parse_identities(values: list[str]) -> list[list[str]]:

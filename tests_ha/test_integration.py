@@ -277,8 +277,6 @@ async def test_a_session_made_before_the_integration_is_not_overwritten(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-
-
 async def test_removing_the_entry_removes_the_repair(
         hass, fp2_device) -> None:
     old_app = hass.config.path("appdaemon", "apps", "fp2-companion")
@@ -353,7 +351,6 @@ async def test_stored_identities_are_not_sent_and_kept_when_empty(
     assert entry.options["app_identities"] == []
     await hass.async_block_till_done()
     assert await hass.config_entries.async_unload(entry.entry_id)
-
 
 
 async def test_clearing_and_replacing_identities_at_once_is_refused(
@@ -736,7 +733,6 @@ async def test_the_broker_is_cleared_and_a_failed_clear_is_retried(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-
 @pytest.mark.parametrize("reason", ["invalid_auth", "cannot_connect",
                                     "invalid_identity_region"])
 async def test_a_failed_sign_in_shows_why_and_recovers(
@@ -798,3 +794,58 @@ async def test_reconfigure_changes_the_account(hass, entry, signed_in) -> None:
     assert result["reason"] == "reconfigure_successful"
     assert entry.data == {"account": "b@example.com", "country": "US"}
     await hass.async_block_till_done()
+
+
+
+async def test_an_unknown_refusal_shows_aqaras_code(hass, signed_in) -> None:
+    from custom_components.fp2_companion import auth, config_flow
+
+    def refuse(*_args):
+        raise auth.SignInFailed(auth.SignInError.REFUSED, 1001, "account locked")
+
+    config_flow.sign_in = refuse
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], SIGN_IN)
+    assert result["errors"] == {"base": "refused"}
+    assert result["description_placeholders"] == {
+        "code": "1001", "message": "account locked"}
+
+
+async def test_reauth_with_the_same_account_reloads_once(
+        hass, fp2_device, signed_in, caplog) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={"account": "a@example.com", "country": "GR"})
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    flow = hass.config_entries.flow.async_progress_by_handler(DOMAIN)[0]
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], SIGN_IN)
+    assert result["reason"] == "reauth_successful"
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert "should use it for scheduling a reload" not in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_removing_the_integration_signs_out(hass, fp2_device) -> None:
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    state = hass.config.path(".storage", "fp2_companion")
+
+    def write():
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "session.json"), "w") as fh:
+            json.dump({"token": "t", "phone_id": "P"}, fh)
+
+    await hass.async_add_executor_job(write)
+    await start(hass, entry)
+    await hass.config_entries.async_remove(entry.entry_id)
+
+    def read():
+        with open(os.path.join(state, "session.json")) as fh:
+            return json.load(fh)
+
+    kept = await hass.async_add_executor_job(read)
+    assert "token" not in kept and kept["phone_id"] == "P"
