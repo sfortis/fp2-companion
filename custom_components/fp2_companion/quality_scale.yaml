@@ -1,0 +1,100 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: >
+      The integration registers no actions. The card's websocket commands
+      are registered once, in async_setup.
+  appropriate-polling:
+    status: exempt
+    comment: >
+      Nothing polls. The cloud is read at startup, after a write and on
+      Refresh, and the live positions arrive over a push socket.
+  brands: done
+  common-modules:
+    status: done
+    comment: >
+      The base entity is in entity.py. There is no DataUpdateCoordinator:
+      runtime.py runs the app and signals each device's changes, which is
+      the coordinator's role here.
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: todo
+    comment: >
+      The Aqara client (aqara_cloud.py, regions.py, live_track.py) is part
+      of the integration. It moves to its own library on PyPI later.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no actions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: >
+      The integration registers no actions. A refused card command answers
+      with a websocket error.
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage: done
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery:
+    status: exempt
+    comment: >
+      The FP2 is a HomeKit Device accessory. A HomeKit matcher in this
+      manifest would take it away from HomeKit Device, which reports its
+      presence locally. The integration finds every FP2 that HomeKit Device
+      has paired, by itself.
+  discovery-update-info:
+    status: exempt
+    comment: The integration talks to the Aqara cloud, not to a local address.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices: done
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: exempt
+    comment: >
+      Every entity is one the card reads, so none is disabled by default.
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues: done
+  stale-devices: done
+
+  # Platinum
+  async-dependency:
+    status: todo
+    comment: The Aqara client blocks and runs on a worker thread of its own.
+  inject-websession:
+    status: todo
+    comment: The Aqara client opens its own connections.
+  strict-typing:
+    status: todo
+    comment: companion.py and the Aqara client are not fully typed yet.

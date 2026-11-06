@@ -163,12 +163,39 @@ not depend on the cloud.
     start and raises a repair. Native entities on the HomeKit
     device, which decision 3 rules out for MQTT discovery, are now possible
     and left for later.
+27. The entities are native since 2026-11-06, and MQTT is gone (owner's
+    decision). `companion.py` keeps the state and the command methods and
+    calls `changed(key)`, `added(device)` and `live(key, message)` on the
+    runtime; the runtime turns these into dispatcher signals, and the
+    entities read the state, which the worker builds whole so that the
+    event loop never reads a file. Home Assistant 2026.10 made a device
+    belong to one config entry, so the entities cannot join the HomeKit
+    device: each FP2 gets a device of its own, "<FP2> Settings", as under
+    MQTT. The entity ids stay those of the MQTT entities; the first setup
+    moves each MQTT registry entry over with its id and a person's
+    settings, removes the old MQTT devices, and clears the retained topics
+    on the broker, retrying at a later start until the broker answers
+    (`migrate.py`). The card's commands and the live view are websocket
+    commands that require an admin user (`websocket_api.py`), which closes
+    the gap that any user could publish a command; the live subscription is
+    the card's lease. A backup preview is the answer to its command, not an
+    entity.
+28. Signing in is the config flow's since 2026-11-06 (owner's decision,
+    replacing decisions 15 and 16 for the card). The form asks for the
+    account, the password and the country, signs in before the entry is
+    created, and keeps only the account and the country; the integration
+    encrypts the password's MD5 as the Aqara app does and keeps only the
+    session. A lost session starts the reauth flow, Reconfigure changes the
+    account, and a sign-in while the integration runs goes through the
+    app's worker under its cloud lock, so it cannot interleave with a token
+    refresh. Removing the integration signs out and keeps the PhoneId.
+    The card no longer signs in or encrypts anything.
 
 ## Modules
 
 The pure modules sit beside the app, the app file holds what was the
-AppDaemon app, and only the runtime, the setup and the config flow import
-Home Assistant.
+AppDaemon app, and only the runtime, the entities, the setup and the flows
+import Home Assistant.
 
 - `aqara_cloud.py` is the cloud client and imports nothing from Home
   Assistant.
@@ -187,12 +214,19 @@ Home Assistant.
   watched device, writes the heartbeat, reconnects with a backoff, and
   parses each push into targets with their place on the grid.
 - `companion.py` is the app: discovery, commands, reads, writes and their
-  readback, backups, entities and status.
-- `runtime.py` runs the app inside Home Assistant (decision 26): its worker
-  thread, the log, timers, MQTT and the device registry.
-- `__init__.py` sets the integration up: it waits for MQTT, prepares the
-  state folder, copies the AppDaemon app's state once and starts the app.
-  `config_flow.py` adds it with no questions and holds the options.
+  readback, backups, and the state the entities show.
+- `runtime.py` runs the app inside Home Assistant (decisions 26 and 27):
+  its worker thread, the log, timers, the device registry, the signals that
+  update the entities, the live listeners and the reauth trigger.
+- `entity.py`, `select.py`, `switch.py`, `button.py` and `sensor.py` are the
+  native entities. `websocket_api.py` holds the card's commands and the
+  live subscription. `migrate.py` moves the MQTT entities of 1.4.x over.
+- `auth.py` signs in for the config flow and signs out on removal.
+  `config_flow.py` holds the sign-in, the reauth, the reconfigure and the
+  options. `diagnostics.py` redacts the account and the FP2s' identities.
+- `__init__.py` sets the integration up: it waits while the AppDaemon app is
+  installed, prepares the state folder, copies the AppDaemon app's state
+  once, moves the MQTT entities, checks the session and starts the app.
 - `tools/` holds command line helpers that run inside the Home Assistant
   container: `login.py` (sign-in without the card), `zone_test.py` (decision
   10) and `live_probe.py` (checks the live protocol without the app).
@@ -210,11 +244,12 @@ For an FP2 whose HomeKit entities start with `presence_sensor_fp2_b2c3`:
 | `button.presence_sensor_fp2_b2c3_ai_learning` | Starts AI learning |
 | `button.presence_sensor_fp2_b2c3_refresh` | Reads everything from the cloud again |
 | `sensor.presence_sensor_fp2_b2c3_zones` | Zone count, with the zones and the backups as attributes |
-| `sensor.presence_sensor_fp2_b2c3_backup_preview` | The backup the card is previewing |
 | `sensor.presence_sensor_fp2_b2c3_cloud_status` | A status code, a readable message and the session |
-| `sensor.fp2_companion_devices` | Every FP2 the app serves, and the countries for the sign-in |
+| `sensor.fp2_companion_devices` | Every FP2 the app serves, and the session |
 
-A per-zone select is added or retired when a zone is created or deleted.
+A per-zone select is added or retired when a zone is created or deleted,
+and follows a rename in the Aqara app. The settings are unavailable while
+the cloud cannot read or write them.
 
 ## Writes and Readback
 
@@ -250,3 +285,5 @@ does not have. Zones that already match are left alone.
   checked.
 - A new zone appears in HomeKit as an extra occupancy sensor of the FP2. Its
   Home Assistant entity can be left behind when the zone is deleted.
+- The Aqara client is still part of the integration, not a library on PyPI,
+  so the Gold rule dependency-transparency is open (quality_scale.yaml).
