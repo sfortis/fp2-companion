@@ -11,15 +11,16 @@ or a session file that was deleted. A second run reuses the PhoneId already in
 the session file, so the account does not collect a new parallel session each
 time.
 
-The app identity is the region's built-in pair, and a pair in the add-on's
-`/config/secrets.yaml` (`aqara_app_id`, `aqara_app_key`) is tried after it
-when there is one. The account and the password arrive on stdin, one per
-line, so neither appears in a process list or a shell history. Run it inside
-the AppDaemon container (`$CONTAINER`), typing both at the prompts, or feed
-them from a password manager:
+The app identity is the region's built-in pair, and a pair in Home
+Assistant's `/config/secrets.yaml` (`aqara_app_id`, `aqara_app_key`) is tried
+after it when there is one. The account and the password arrive on stdin,
+one per line, so neither appears in a process list or a shell history. Run it
+inside the Home Assistant container, typing both at the prompts, or feed them
+from a password manager. On Home Assistant OS, from the SSH app with
+protection mode off:
 
-    docker exec -it $CONTAINER \\
-        python3 /config/apps/fp2_companion/tools/login.py --did <did> --country GR
+    docker exec -it homeassistant python3 \\
+        /config/custom_components/fp2_companion/tools/login.py --did <did> --country GR
 
 After the login it reads the sensitivity of `--did` once, which proves the new
 session works. It prints only codes, the expiry date and that value, never a
@@ -32,12 +33,13 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from aqara_cloud import (  # noqa: E402
+import _package
+from custom_components.fp2_companion.aqara_cloud import (
     RID_SENSITIVITY, AqaraCloud, AqaraError, SessionStore)
 
 SECRETS_FILE = "/config/secrets.yaml"
-SESSION_FILE = "/share/appdaemon/fp2_companion/session.json"
+ENTRIES_FILE = "/config/.storage/core.config_entries"
+SESSION_FILE = str(pathlib.Path(_package.STATE_DIR) / "session.json")
 IDENTITY_KEYS = ("aqara_app_id", "aqara_app_key")
 
 
@@ -55,6 +57,24 @@ def load_identity(path):
     return str(secrets["aqara_app_id"]), str(secrets["aqara_app_key"])
 
 
+def load_identity_from_options(path):
+    """The first `app_id:app_key` of the integration's options, or
+    (None, None)."""
+    try:
+        with open(path) as handle:
+            entries = json.load(handle)["data"]["entries"]
+    except (FileNotFoundError, KeyError, ValueError):
+        return None, None
+    for entry in entries:
+        if entry.get("domain") != "fp2_companion":
+            continue
+        for value in entry.get("options", {}).get("app_identities", []):
+            app_id, sep, app_key = str(value).partition(":")
+            if sep and app_id.strip() and app_key.strip():
+                return app_id.strip(), app_key.strip()
+    return None, None
+
+
 def read_credentials():
     if sys.stdin.isatty():
         return input("account: ").strip(), getpass.getpass("password: ")
@@ -68,6 +88,9 @@ def read_credentials():
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--secrets", default=SECRETS_FILE)
+    parser.add_argument("--entries", default=ENTRIES_FILE,
+                        help="Home Assistant's config entries, where the "
+                             "integration's options are")
     parser.add_argument("--session", default=SESSION_FILE)
     parser.add_argument("--did", required=True,
                         help="the FP2 whose sensitivity is read to verify")
@@ -76,7 +99,10 @@ def main():
                              "app, for example GR or US")
     args = parser.parse_args()
 
+    # secrets.yaml first, then the pair in the integration's options.
     appid, appkey = load_identity(args.secrets)
+    if appid is None:
+        appid, appkey = load_identity_from_options(args.entries)
     account, password = read_credentials()
     cloud = AqaraCloud(SessionStore(args.session), appid, appkey, args.did)
     report = {}

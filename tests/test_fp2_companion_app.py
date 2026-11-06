@@ -11,7 +11,9 @@ import pytest
 
 from conftest import World, _bind, _load, mqtt_payload
 
-from aqara_cloud import AqaraAuthError, AqaraError, AqaraRefused
+from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
+                                                         AqaraError,
+                                                         AqaraRefused)
 
 DID = "lumi1.54ef44a1b2c3"
 KEY = "54ef44a1b2c3"
@@ -167,10 +169,7 @@ class FakeCloud:
 
 @pytest.fixture
 def fp2(tmp_path):
-    mod = _load("fp2_companion", "fp2_companion/fp2_companion.py")
-    mod.SESSION_FILE = str(tmp_path / "session.json")
-    mod.BACKUP_ROOT = str(tmp_path / "backups")
-    mod.RUNTIME_FILE = str(tmp_path / "runtime.json")
+    mod = _load("companion")
 
     def make(devices=None, world=None, cloud=None, clouds=None, args=None):
         """`devices` is what the discovery template returns. The session and
@@ -180,15 +179,16 @@ def fp2(tmp_path):
         app = mod.Fp2Companion()
         _bind(app, world)
         found = [LIVING] if devices is None else devices
-        app.templates = []
+        app.lookups = 0
 
-        def render(template):
-            app.templates.append(template)
+        def find_devices():
+            app.lookups += 1
             if isinstance(found, Exception):
                 raise found
             return found
-        app.render_template = render
-        app.args = dict({"app_id": "id", "app_key": "key"}, **(args or {}))
+        app.find_devices = find_devices
+        app.args = dict({"app_id": "id", "app_key": "key",
+                         "state_dir": str(tmp_path)}, **(args or {}))
         app.cloud_fake = cloud or FakeCloud()
         app.clouds = clouds or {}
         app.dids = []
@@ -221,7 +221,7 @@ def cmd(app, key, payload="", device=KEY):
     """A device command, or an app command (login, logout, rescan)."""
     topic = (f"fp2companion/cmd/{key}" if key in ("login", "logout", "rescan")
              else f"fp2companion/{device}/cmd/{key}")
-    app._on_cmd("MQTT_MESSAGE", {"topic": topic, "payload": payload}, None)
+    app._on_cmd(topic, payload)
 
 
 def discovery(world, component, key):
@@ -238,16 +238,18 @@ def zone_attrs(world):
 
 
 # ----------------------------------------------------------------- startup
-def test_the_command_listener_is_in_the_mqtt_namespace(fp2):
+def test_the_app_subscribes_to_its_and_every_devices_commands(fp2):
     app, world = fp2()
-    assert world.listeners[0]["namespace"] == "mqtt"
+    assert world.subscriptions == [
+        {"topics": ["fp2companion/cmd/#", "fp2companion/+/cmd/#"],
+         "callback": app._on_cmd}]
 
 
 def test_the_device_is_found_in_home_assistant(fp2):
     app, world = fp2()
     app.start()
     assert DID in app.dids
-    assert "homekit_controller" in app.templates[0]
+    assert app.lookups == 1
     cfg = discovery(world, "select", "sensitivity")
     assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
     assert cfg["device"]["suggested_area"] == "Living Room"
@@ -351,11 +353,10 @@ def test_an_unknown_option_is_refused_and_nothing_is_written(fp2):
     assert status(world) == "refused"
 
 
-def test_another_apps_command_is_ignored(fp2):
+def test_a_topic_outside_the_prefix_is_ignored(fp2):
     app, world = fp2()
     app.start()
-    app._on_cmd("MQTT_MESSAGE", {"topic": "lgoled/cmd/sensitivity",
-                                 "payload": "High"}, None)
+    app._on_cmd("lgoled/cmd/sensitivity", "High")
     assert app.cloud_fake.writes == []
 
 
@@ -1237,7 +1238,7 @@ def test_rescans_while_nothing_is_found_keep_one_retry(fp2):
 
 
 def test_a_retry_that_fires_cancels_its_own_handle_silently(fp2):
-    """AppDaemon removes a one-shot timer before its callback runs, so the
+    """A one-shot timer has fired by the time its callback runs, so the
     retry's own handle is gone by the time start() cancels it."""
     app, world = fp2(devices=[])
     app.start()
@@ -1284,7 +1285,7 @@ def test_a_card_lease_reaches_the_tracker_per_device_and_tab(fp2):
                                  ("release", DID, "tab-1")]
 
 
-def test_live_positions_go_straight_to_the_broker_unretained(fp2):
+def test_live_positions_are_published_unretained(fp2):
     app, world = fp2()
     app.start()
     before = len(world.calls)
@@ -1294,7 +1295,7 @@ def test_live_positions_go_straight_to_the_broker_unretained(fp2):
     assert len(calls) == 1
     service, _entity, data = calls[0]
     assert service == "mqtt/publish"
-    assert data["namespace"] == "mqtt" and data["retain"] is False
+    assert data["retain"] is False and data["qos"] == 0
     assert data["topic"] == f"{T}/live"
     assert json.loads(data["payload"]) == {"state": "live", "targets": []}
 
@@ -1329,24 +1330,3 @@ def test_no_old_card_copy_logs_nothing(fp2, tmp_path):
     before = list(world.logs)
     app._check_old_card()
     assert world.logs == before
-
-
-# ------------------------------------------------------------ command topics
-def test_startup_probes_the_command_topics(fp2):
-    app, world = fp2()
-    probes = [d["topic"] for s, _e, d in world.calls
-              if s == "mqtt/publish" and d.get("namespace") == "mqtt"]
-    assert sorted(probes) == ["fp2companion/cmd/probe",
-                              "fp2companion/probe/cmd/probe"]
-
-
-def test_a_probe_is_not_taken_for_a_command(fp2):
-    app, world = fp2()
-    app.start()
-    before = list(world.logs)
-    app._on_cmd("MQTT_MESSAGE", {"topic": "fp2companion/cmd/probe",
-                                 "payload": app.commands.nonce}, None)
-    app._on_cmd("MQTT_MESSAGE", {"topic": "fp2companion/probe/cmd/probe",
-                                 "payload": app.commands.nonce}, None)
-    assert world.logs == before
-    assert app.commands.heard == {"fp2companion/cmd/#", "fp2companion/+/cmd/#"}

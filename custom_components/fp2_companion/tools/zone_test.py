@@ -5,14 +5,15 @@ with real zones (docs/DESIGN.md, decision 10). The calls are the ones the
 official app makes: a create is `range/set` without a rangeId, and a delete
 is `range/del` with a list of ids.
 
-Run it inside the AppDaemon container (`$CONTAINER` below), in two steps
-with a look at the Aqara app in between:
+Run it inside the Home Assistant container, in two steps with a look at
+the Aqara app in between. On Home Assistant OS, from the SSH app with
+protection mode off:
 
-    docker exec $CONTAINER \\
-        python3 /config/apps/fp2_companion/tools/zone_test.py --did <did> --create
+    docker exec homeassistant python3 \\
+        /config/custom_components/fp2_companion/tools/zone_test.py --did <did> --create
     (look for the zone in the Aqara app)
-    docker exec $CONTAINER \\
-        python3 /config/apps/fp2_companion/tools/zone_test.py --did <did> --delete
+    docker exec homeassistant python3 \\
+        /config/custom_components/fp2_companion/tools/zone_test.py --did <did> --delete
 
 Zones are matched by rangeId and never by name. `--create` backs up the
 zones, sends the create, reads the list back and finds the new zone as the
@@ -29,15 +30,16 @@ import sys
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from aqara_cloud import AqaraCloud, AqaraError, SessionStore  # noqa: E402
+import _package  # noqa: E402
+from custom_components.fp2_companion.aqara_cloud import (  # noqa: E402
+    AqaraCloud, AqaraError, SessionStore)
+from custom_components.fp2_companion.zone_model import (  # noqa: E402
+    ascii_map, created_zone, new_zone, validate_zone, wire_zone, write_backup)
 from login import SECRETS_FILE, SESSION_FILE, load_identity  # noqa: E402
-from zone_model import (ascii_map, created_zone, new_zone,  # noqa: E402
-                        validate_zone, wire_zone, write_backup)
 
-BACKUP_ROOT = "/share/appdaemon/fp2_companion/backups"
-TEST_ZONE_FILE = "/share/appdaemon/fp2_companion/test_zone.json"
+BACKUP_ROOT = os.path.join(_package.STATE_DIR, "backups")
+TEST_ZONE_FILE = os.path.join(_package.STATE_DIR, "test_zone.json")
 TEST_NAME = "TestZone"
 # The top right 2 by 2. Move it if a real zone uses these blocks: the tool
 # refuses to create over a detection zone.

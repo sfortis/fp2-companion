@@ -1,69 +1,55 @@
 """Test harness for the fp2_companion app.
 
-Stubs `hassapi` so the app imports without AppDaemon, and provides `World`,
-an in-memory Home Assistant that records service calls, timers and
-listeners. MQTT is the app's only output, so the tests read what it
-published back off the recorded service calls.
+Imports the package without Home Assistant, and provides `World`, a fake
+runtime that records what the app publishes, its timers and its
+subscriptions. MQTT is the app's only output, so the tests read what it
+published back off the recorded calls.
 """
 import importlib.util
 import sys
 import types
 from pathlib import Path
 
-_hass_mod = types.ModuleType("hassapi")
+PACKAGE = "custom_components.fp2_companion"
+PACKAGE_DIR = (Path(__file__).resolve().parent.parent
+               / "custom_components" / "fp2_companion")
+
+# The package's __init__.py needs Home Assistant, which these tests do without.
+# The modules import each other relatively, so two bare packages that only
+# carry the folder in __path__ are enough to import them.
+for _name, _path in (("custom_components", PACKAGE_DIR.parent),
+                     (PACKAGE, PACKAGE_DIR)):
+    if _name not in sys.modules:
+        _pkg = types.ModuleType(_name)
+        _pkg.__path__ = [str(_path)]
+        sys.modules[_name] = _pkg
 
 
-class _Hass:
-    """A minimal base; the World binds the real methods per instance."""
-
-    def __init__(self, *a, **k):
-        pass
-
-
-_hass_mod.Hass = _Hass
-sys.modules["hassapi"] = _hass_mod
-
-APPS = Path(__file__).resolve().parent.parent / "apps"
-APP_DIR = APPS / "fp2_companion"
-# AppDaemon puts the app folder on sys.path, so the app imports its sibling
-# modules by name. The same is done here.
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-
-def _load(module_name, rel_path):
-    path = APPS / rel_path
-    spec = importlib.util.spec_from_file_location(module_name, path)
+def _load(module_name):
+    """A fresh copy of one module of the package, so that a test may replace
+    its constants without reaching the next test."""
+    spec = importlib.util.spec_from_file_location(
+        f"{PACKAGE}.{module_name}", PACKAGE_DIR / f"{module_name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
 class World:
-    """In-memory Home Assistant: states, attributes and recorded calls."""
+    """The runtime's side, in memory: recorded publishes, timers and
+    subscriptions."""
 
     def __init__(self):
-        self.states = {}
-        self.attrs = {}
-        self.calls = []      # (service, entity, data)
+        self.calls = []      # ("mqtt/publish", None, data)
         self.logs = []
 
-    def get_state(self, entity, attribute=None):
-        if attribute is None:
-            return self.states.get(entity)
-        if attribute == "all":
-            return {"state": self.states.get(entity),
-                    "attributes": self.attrs.get(entity, {})}
-        return self.attrs.get(entity, {}).get(attribute)
-
-    def call_service(self, service, **data):
-        self.calls.append((service, data.get("entity_id"), data))
+    def publish(self, topic, payload, retain=False, qos=0):
+        self.calls.append(("mqtt/publish", None,
+                           {"topic": topic, "payload": payload,
+                            "retain": retain, "qos": qos}))
 
     def log(self, *a, **k):
         self.logs.append(" ".join(str(x) for x in a))
-
-    def run_every(self, *a, **k):
-        pass
 
     def run_daily(self, callback, start, *a, **k):
         self.daily = getattr(self, "daily", [])
@@ -86,20 +72,15 @@ class World:
                             "delay": delay})
         return handle
 
-    def listen_event(self, callback=None, event=None, **k):
-        """Recorded with its keywords: the MQTT plugin publishes its events
-        in its own namespace, so a listener without namespace="mqtt" never
-        fires, and only the registration shows it."""
-        self.listeners = getattr(self, "listeners", [])
-        self.listeners.append({"callback": callback, "event": event, **k})
-
-    def listen_state(self, *a, **k):
-        pass
+    def subscribe(self, topics, callback):
+        self.subscriptions = getattr(self, "subscriptions", [])
+        self.subscriptions.append({"topics": list(topics),
+                                   "callback": callback})
 
 
 def _bind(app, world):
-    for name in ("get_state", "call_service", "log", "run_every", "run_in",
-                 "run_daily", "cancel_timer", "listen_event", "listen_state"):
+    for name in ("publish", "log", "run_in", "run_daily", "cancel_timer",
+                 "subscribe"):
         setattr(app, name, getattr(world, name))
 
 

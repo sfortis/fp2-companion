@@ -16,11 +16,11 @@ The socket is open only while a card holds a lease (owner's decision,
 device runs out the device is unsubscribed, and when no device is left the
 socket is closed. Nothing here polls.
 
-aiohttp is asyncio and AppDaemon calls the app from worker threads, so the
+aiohttp is asyncio and the app runs on a worker thread of its own, so the
 tracker owns a private event loop on a daemon thread. The cloud calls are blocking and run on a separate worker thread under
 the app's cloud lock, because a token refresh revokes the token any other
 call is carrying. Publishing runs on one more single worker, which keeps the
-order of the pushes and keeps AppDaemon's call out of the socket loop.
+order of the pushes and keeps the publish call out of the socket loop.
 """
 
 import asyncio
@@ -29,7 +29,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from aqara_cloud import (RID_POSITIONS, VIEW_HEARTBEAT_SECONDS, AqaraAuthError,
+from .aqara_cloud import (RID_POSITIONS, VIEW_HEARTBEAT_SECONDS, AqaraAuthError,
                          AqaraError)
 
 # A lease outlives one missed renewal from a card that renews every 30 s.

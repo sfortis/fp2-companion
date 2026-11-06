@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "FP2 Companion trova da solo ogni Aqara FP2 associato tramite HomeKit Device. Una volta configurato, accedi ad Aqara dalla card FP2 Companion.\n\nSe è ancora installata l'app AppDaemon di FP2 Companion, rimuovila prima: le due non devono condividere la sessione Aqara."
+      }
+    },
+    "abort": {
+      "mqtt_required": "Configura prima l'integrazione MQTT. FP2 Companion pubblica le sue entità e riceve i comandi della card tramite MQTT.",
+      "single_instance_allowed": "FP2 Companion è già configurato. Una sola voce serve tutti gli FP2."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "devices": "FP2 non associati tramite HomeKit",
+          "exclude": "FP2 da ignorare",
+          "backups_keep": "Backup delle zone da conservare per ogni FP2",
+          "token_check_time": "Controllo giornaliero del token",
+          "app_identities": "Identità aggiuntive dell'app Aqara",
+          "clear_app_identities": "Rimuovi le identità app salvate"
+        },
+        "data_description": {
+          "devices": "Il numero di serie di ogni FP2, come 54EF44A1B2C3.",
+          "exclude": "Il numero di serie di ogni FP2 che l'integrazione non deve gestire.",
+          "backups_keep": "Un backup viene scritto ogni volta che le zone cambiano e prima di ogni scrittura di zone.",
+          "token_check_time": "A quest'ora il token viene rinnovato se mancano meno di tre giorni alla scadenza.",
+          "app_identities": "Facoltativo, nella forma app_id:app_key. Provate dopo l'identità integrata della regione. Le coppie salvate non vengono mai mostrate: lascia vuoto per tenerle, oppure inserisci le nuove per sostituirle.",
+          "clear_app_identities": "Spunta per cancellare tutte le coppie salvate."
+        }
+      }
+    },
+    "error": {
+      "invalid_serial": "Ogni voce deve essere un numero di serie FP2 di 12 caratteri, come 54EF44A1B2C3.",
+      "invalid_identity": "Ogni voce deve essere nella forma app_id:app_key."
+    }
+  },
+  "issues": {
+    "appdaemon_app_installed": {
+      "title": "L'app AppDaemon di FP2 Companion è ancora installata",
+      "description": "FP2 Companion ora funziona come integrazione, ma l'app AppDaemon è ancora in `{path}`. Se AppDaemon la esegue, app e integrazione eseguirebbero entrambe ogni comando della card e rinnoverebbero la stessa sessione Aqara, disconnettendosi a vicenda. Per questo l'integrazione aspetta.\n\nPrima ferma AppDaemon, oppure togli la voce `fp2_companion` da `apps.yaml` e riavvialo, così l'app non è più in esecuzione. Poi cancella quella cartella. La vecchia sessione in `/share/appdaemon/fp2_companion/` la cancella l'integrazione dopo averla copiata. L'integrazione parte da sola, mantiene la sessione Aqara e i backup delle zone, e questa riparazione sparisce."
+    }
+  }
+}

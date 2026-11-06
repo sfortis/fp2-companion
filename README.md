@@ -1,8 +1,7 @@
 # FP2 Companion for Home Assistant
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-companion-41BDF5?logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
-[![HACS](https://img.shields.io/badge/HACS-default-41BDF5)](https://hacs.xyz/)
-[![AppDaemon](https://img.shields.io/badge/AppDaemon-4.5%2B-blue)](https://appdaemon.readthedocs.io/)
+[![HACS](https://img.shields.io/badge/HACS-integration-41BDF5)](https://hacs.xyz/)
 
 A Home Assistant companion for the Aqara FP2 presence sensor. It brings the
 settings that otherwise live only in the Aqara phone app into Home
@@ -12,7 +11,7 @@ Aqara app shows them.
 
 The FP2 reports presence to Home Assistant locally over HomeKit, but it has
 no local channel for its settings, which normally means the Aqara phone app.
-FP2 Companion is an [AppDaemon](https://appdaemon.readthedocs.io/) app and a
+FP2 Companion is a Home Assistant integration and a
 [Lovelace card](https://github.com/sfortis/fp2-companion-card) that make
 those settings available in Home Assistant through
 the same cloud API the Aqara app uses. Presence keeps flowing over HomeKit
@@ -21,14 +20,12 @@ and does not depend on the cloud.
 ## Requirements
 
 - Home Assistant with the FP2 paired through **HomeKit Device** (the
-  `homekit_controller` integration). The app finds FP2s by their HomeKit
-  model, `PS-S02D`, `PS-S02E` or `PS-T02E`.
-- An MQTT broker, such as the Mosquitto add-on, with Home Assistant's
+  `homekit_controller` integration). The integration finds FP2s by their
+  HomeKit model, `PS-S02D`, `PS-S02E` or `PS-T02E`.
+- An MQTT broker, such as the Mosquitto app, with Home Assistant's
   **MQTT** integration connected to it.
-- The **AppDaemon** add-on (4.5 or later), with its MQTT plugin connected to
-  the same broker.
 - The [FP2 Companion Card](https://github.com/sfortis/fp2-companion-card),
-  installed from HACS. The card is the app's user interface.
+  installed from HACS. The card is the integration's user interface.
 - An **Aqara account** that owns the FP2s.
 - An **admin** Home Assistant user for the live view, because it listens
   through Home Assistant's own MQTT subscription, which is open to admins
@@ -60,38 +57,54 @@ and does not depend on the cloud.
   wall mount.
 - **Sign-in from the card:** email, password and country, the same as the
   Aqara app. The password is encrypted in the browser and never stored.
-- **No polling:** the app reads the cloud at startup, after every write and
+- **No polling:** the integration reads the cloud at startup, after every write and
   on Refresh. The live view runs only while someone is looking at it.
 
 ## Installation
 
-### 1. The app
+### 1. The integration
 
-**With HACS.** In HACS, open the integration's options and turn on
-**Enable AppDaemon apps discovery & tracking**. Then search for
-**FP2 Companion** in HACS and download it. If the search does not find it
-yet, add `https://github.com/sfortis/fp2-companion` as a custom repository
-of the type **AppDaemon** instead. HACS puts the app under
-`appdaemon/apps/` in Home Assistant's configuration folder, while the
-AppDaemon add-on on Home Assistant OS reads its apps from its own folder by
-default. Once the download has created that folder, point the add-on at it
-in its `appdaemon.yaml` (`/addon_configs/a0d7b954_appdaemon/appdaemon.yaml`)
-and restart the add-on:
+**With HACS.** Search for **FP2 Companion** in HACS (the Marketplace since
+Home Assistant 2026.11) and download it. If the search does not find it yet,
+add `https://github.com/sfortis/fp2-companion` as a custom repository of the
+type **Integration** instead. Restart Home Assistant, then add
+**FP2 Companion** in **Settings > Devices & services**.
 
-```yaml
-appdaemon:
-  app_dir: /homeassistant/appdaemon/apps
-```
+**By hand.** Copy `custom_components/fp2_companion/` into the
+`custom_components` folder of Home Assistant's configuration folder, restart
+Home Assistant and add the integration as above.
 
-Set it only after the download: the add-on may not start while the folder
-does not exist yet. The setting moves the apps folder for every app, so move
-any apps you already have into it as well.
+There is nothing to fill in when adding it: the FP2s are found by
+themselves. Its options take extra FP2s that are not paired over HomeKit,
+FP2s to leave alone, the number of zone backups to keep and the time of the
+daily token check.
 
-**By hand.** Copy `apps/fp2_companion/` into AppDaemon's apps folder. On
-Home Assistant OS that is `/addon_configs/a0d7b954_appdaemon/apps/`.
+**Moving from the AppDaemon app (1.4.1 and earlier).** HACS no longer
+manages AppDaemon apps since Home Assistant 2026.11, and the app and the
+integration must not run side by side: both would refresh the same Aqara
+session and sign each other out. So:
 
-The app's settings are in `fp2_companion.yaml` beside it, and the defaults
-suit most homes.
+1. Stop the app: stop AppDaemon, or remove the `fp2_companion` entry from
+   AppDaemon's `apps.yaml` (if you added one) and restart it. Then delete
+   the app's folder: `appdaemon/apps/fp2-companion/` in Home Assistant's
+   configuration folder when HACS installed it, or the `fp2_companion/`
+   folder you copied by hand. (The integration cannot tell whether AppDaemon
+   unloads an app when its folder disappears, hence this order.)
+2. Install and add the integration as above. Its first start copies the
+   session and the zone backups from `/share/appdaemon/fp2_companion/`, so
+   you stay signed in and keep every backup, and then deletes the old
+   `session.json` there, so no second valid token is left behind. A file
+   that is already in the new place is never overwritten. The entities, their ids and
+   the card stay as they were.
+3. Settings you had in `fp2_companion.yaml` (`devices`, `exclude`,
+   `backups_keep`, `token_check_time`) go into the integration's options.
+
+While the app's folder is still there, the integration does not start and
+raises a repair that says so; it starts by itself once the folder is gone.
+It can see the folder only where HACS put it. If you copied the app by hand
+into the AppDaemon app's own folder
+(`/addon_configs/a0d7b954_appdaemon/apps/`), remove it from there yourself
+first.
 
 ### 2. The card
 
@@ -110,25 +123,24 @@ Its options are in the card's README.
 
 **Updating from version 1.3.1 or earlier.** Those versions copied the card
 into Home Assistant's `www/fp2-companion/` folder and added a dashboard
-resource for it themselves. The app no longer does either, so that copy
+resource for it themselves. The integration does neither, so that copy
 stops receiving updates. Install the card from HACS, then delete the
 resource whose URL starts with `/local/fp2-companion/` and the folder
-`www/fp2-companion/`. A resource you added for the card by hand goes too. The AppDaemon log reminds you while the folder is
-still there. The
+`www/fp2-companion/`. A resource you added for the card by hand goes too.
+Home Assistant's log reminds you while the folder is still there. The
 [card's README](https://github.com/sfortis/fp2-companion-card#moving-from-the-card-the-app-installed)
 has the steps.
 
-The card sends its commands to the app over MQTT. At startup the app checks
-that they reach it, and subscribes to its command topics itself when your
-`client_topics` list in `appdaemon.yaml` leaves them out. When something
-stops either step, the AppDaemon log says what to do by hand.
+The card sends its commands to the integration over MQTT, which receives
+them through Home Assistant's own MQTT connection.
 
 ### 3. Sign in
 
-Open the card and sign in with your Aqara account and its country. The app
-creates its own session and keeps it alive by itself; the token is renewed
-before it expires, and the password is not needed again.
-`apps/fp2_companion/tools/login.py` does the same sign-in from the command line.
+Open the card and sign in with your Aqara account and its country. The
+integration creates its own session and keeps it alive by itself; the token
+is renewed before it expires, and the password is not needed again.
+`custom_components/fp2_companion/tools/login.py` does the same sign-in from
+the command line.
 
 ## Using It
 
@@ -150,8 +162,9 @@ it works.
   A ceiling mount has not been checked.
 - Accounts in the China region (CN) cannot sign in with the built-in Aqara
   app identity. Such an account needs a working pair of its own, as
-  `aqara_app_id` and `aqara_app_key` in the add-on's `secrets.yaml`, with
-  `app_id` and `app_key` uncommented in `fp2_companion.yaml`.
+  `app_id:app_key` in the integration's options; `tools/login.py` reads the
+  pair from `secrets.yaml` (`aqara_app_id`, `aqara_app_key`) or, if there is
+  none, from the options.
 - A zone changes its attribute only from or to detection. To turn an
   entrance zone into the edge, make it a detection zone first.
 
@@ -159,19 +172,21 @@ it works.
 
 - The password is turned into its MD5 and encrypted with Aqara's public RSA
   key in the browser, as the Aqara app does, and only that block crosses
-  Home Assistant and MQTT. The app uses it once and keeps only the token.
-- The session lives in `/share/appdaemon/fp2_companion/session.json` with mode
-  0600. Nothing in the app logs a token, a user id or the app key.
-- The app writes only a fixed list of settings and values, and refuses
+  Home Assistant and MQTT. The integration uses it once and keeps only the
+  token.
+- The session lives in `.storage/fp2_companion/session.json` in Home
+  Assistant's configuration folder, with mode 0600. Nothing in the
+  integration logs a token, a user id or the app key.
+- The integration writes only a fixed list of settings and values, and refuses
   anything else before it reaches the network.
-- Zone backups are in `/share/appdaemon/fp2_companion/backups/<device id>/`.
-- The app writes nothing outside its own state folder. It does not use the
-  add-on's Supervisor token.
+- Zone backups are in `.storage/fp2_companion/backups/<device id>/`.
+- The integration writes nothing outside its own state folder, apart from
+  its MQTT messages.
 
 ## Entities
 
 For an FP2 whose HomeKit entities start with `presence_sensor_fp2_b2c3`, the
-app creates `select.presence_sensor_fp2_b2c3_sensitivity`,
+integration creates `select.presence_sensor_fp2_b2c3_sensitivity`,
 `..._approach_distance`, one `..._<zone>_sensitivity` per detection zone,
 `switch...._ai_detection`, `button...._ai_learning`, `button...._refresh`,
 `sensor...._zones`, `sensor...._backup_preview` and
@@ -182,13 +197,18 @@ creates `sensor.fp2_companion_devices`, which lists every FP2 it serves.
 
 ```
 python3 -m pytest tests
+python3 -m pytest -c tests_ha/pytest.ini tests_ha
 ```
 
-The tests need only `pytest`. The card and its tests are in the
+`tests` covers the app logic and the cloud client and needs only `pytest`.
+`tests_ha` runs the integration inside Home Assistant and needs
+`pytest-homeassistant-custom-component` (Python 3.14 for current Home
+Assistant). The card and its tests are in the
 [card's repository](https://github.com/sfortis/fp2-companion-card).
-`scripts/deploy.sh` deploys the app to a Home Assistant OS host over SSH.
+`scripts/deploy.sh` deploys the integration to a Home Assistant OS host over
+SSH.
 
-[docs/DESIGN.md](docs/DESIGN.md) explains how the app is built and why, and
+[docs/DESIGN.md](docs/DESIGN.md) explains how it is built and why, and
 [docs/PROTOCOL.md](docs/PROTOCOL.md) describes the cloud API it uses.
 
 ## Credits
