@@ -15,6 +15,9 @@
 #   SSH_HOST     the host as ssh knows it            (default: homeassistant)
 #   CONFIG_DIR   Home Assistant's config folder      (default: /config)
 #   RESTART      1 restarts Home Assistant after the copy (default: 0)
+#   PYTHON       the Python 3.12 or newer that validates the files
+#                (default: the first of python3, python3.14, python3.13 and
+#                python3.12 that is 3.12 or newer)
 #
 # Only files tracked by git are deployed, every one is validated first, and a
 # file that does not parse refuses the whole deploy. Home Assistant loads the
@@ -28,6 +31,23 @@ SSH_HOST="${SSH_HOST:-homeassistant}"
 CONFIG_DIR="${CONFIG_DIR:-/config}"
 RESTART="${RESTART:-0}"
 PACKAGE="custom_components/fp2_companion"
+
+# The integration uses Python 3.12 syntax, and ast.parse accepts only the
+# grammar of the Python that runs it, so an older python3 would refuse a
+# valid tree.
+if [ -z "${PYTHON:-}" ]; then
+  for candidate in python3 python3.14 python3.13 python3.12; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+        && "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "${PYTHON:-}" ]; then
+  echo "ERROR: validating the integration needs Python 3.12 or newer; set PYTHON." >&2
+  exit 1
+fi
 
 cd "$ROOT"
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -48,10 +68,10 @@ deploy_integration() {
     [ -f "$f" ] || { echo "ERROR: $f is tracked but missing." >&2; exit 1; }
     case "$f" in
       *.py)
-        python3 -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" \
+        "$PYTHON" -c "import ast, sys; ast.parse(open(sys.argv[1]).read())" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
       *.json)
-        python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$f" \
+        "$PYTHON" -c "import json, sys; json.load(open(sys.argv[1]))" "$f" \
           || { echo "  $f FAILED"; failed=$((failed + 1)); } ;;
     esac
   done
