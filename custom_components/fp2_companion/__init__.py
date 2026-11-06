@@ -82,14 +82,14 @@ async def async_setup_entry(
     await async_migrate_mqtt_entities(hass, entry)
 
     app = HassFp2Companion(hass, entry.entry_id, _app_args(hass, entry, state_dir))
+    entry.runtime_data = app
     try:
         await app.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
-        # The app's timers must not stay behind a failed start.
+        # The app's worker and timers must not stay behind a failed setup.
         await app.async_stop()
         raise
-    entry.runtime_data = app
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def _async_stop_app(_event: Event) -> None:
         # Home Assistant does not unload entries when it shuts down.

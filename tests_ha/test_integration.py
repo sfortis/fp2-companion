@@ -553,3 +553,115 @@ async def test_the_live_view_holds_a_lease_while_it_is_open(
     await wait_for_worker(hass, entry)
     assert [on for _c, on in leases] == [True, True, False]
     assert len({c for c, _on in leases}) == 1
+
+
+async def test_a_renamed_zone_keeps_its_select_and_takes_the_name(
+        hass, entry) -> None:
+    await show_zones(hass, entry, zones((3, "Couch")))
+    registry = er.async_get(hass)
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    registry.async_update_entity(f"select.{PREFIX}_couch_sensitivity",
+                                 area_id=kitchen.id)
+    await show_zones(hass, entry, zones((3, "Sofa")))
+    await hass.async_block_till_done()
+    assert registry.async_get(f"select.{PREFIX}_couch_sensitivity").area_id \
+        == kitchen.id
+    state = hass.states.get(f"select.{PREFIX}_couch_sensitivity")
+    assert state.name == "Presence-Sensor-FP2-B2C3 Settings Sofa sensitivity"
+    assert hass.states.get(f"select.{PREFIX}_sofa_sensitivity") is None
+
+
+async def test_an_mqtt_duplicate_does_not_take_over_a_moved_entity(
+        hass, fp2_device) -> None:
+    """A broker that was never cleared brings the MQTT entity back as _2; the
+    next start removes it and the native entity keeps its id and name."""
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    native = registry.async_get_or_create(
+        "select", DOMAIN, f"{OBJ}_sensitivity",
+        suggested_object_id=f"{PREFIX}_sensitivity", config_entry=entry)
+    registry.async_update_entity(native.entity_id, name="Living sensitivity")
+    duplicate = registry.async_get_or_create(
+        "select", "mqtt", f"{OBJ}_sensitivity",
+        suggested_object_id=f"{PREFIX}_sensitivity", config_entry=mqtt_entry)
+    assert duplicate.entity_id == f"select.{PREFIX}_sensitivity_2"
+    await start(hass, entry)
+    assert registry.async_get(f"select.{PREFIX}_sensitivity_2") is None
+    kept = registry.async_get(f"select.{PREFIX}_sensitivity")
+    assert kept.platform == DOMAIN and kept.name == "Living sensitivity"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_only_what_a_person_disabled_stays_disabled(hass, fp2_device) -> None:
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "select", "mqtt", f"{OBJ}_sensitivity",
+        suggested_object_id=f"{PREFIX}_sensitivity", config_entry=mqtt_entry,
+        disabled_by=er.RegistryEntryDisabler.CONFIG_ENTRY)
+    registry.async_get_or_create(
+        "select", "mqtt", f"{OBJ}_approach_distance",
+        suggested_object_id=f"{PREFIX}_approach_distance",
+        config_entry=mqtt_entry, disabled_by=er.RegistryEntryDisabler.USER)
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    assert registry.async_get(f"select.{PREFIX}_sensitivity").disabled_by is None
+    assert registry.async_get(f"select.{PREFIX}_approach_distance").disabled_by \
+        is er.RegistryEntryDisabler.USER
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.fixture
+async def mqtt(hass: HomeAssistant, mqtt_mock):
+    """MQTT, unloaded after the test so that its client leaves no timer."""
+    yield mqtt_mock
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
+    for mqtt_entry in hass.config_entries.async_entries("mqtt"):
+        await hass.config_entries.async_unload(mqtt_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_the_broker_is_cleared_and_a_failed_clear_is_retried(
+        hass, mqtt, fp2_device, monkeypatch) -> None:
+    from homeassistant.components import mqtt as mqtt_component
+
+    from custom_components.fp2_companion import migrate
+
+    monkeypatch.setattr(migrate, "RETAINED_WAIT", 0)
+    registry = er.async_get(hass)
+    mqtt_entry = hass.config_entries.async_entries("mqtt")[0]
+    registry.async_get_or_create(
+        "select", "mqtt", f"{OBJ}_sensitivity",
+        suggested_object_id=f"{PREFIX}_sensitivity", config_entry=mqtt_entry)
+    pending = hass.config.path(".storage", "fp2_companion",
+                               "mqtt_cleanup_pending.json")
+
+    # The broker is unreachable on the first start: the cleanup waits.
+    async def no_client(_hass):
+        return False
+
+    monkeypatch.setattr(mqtt_component, "async_wait_for_mqtt_client", no_client)
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert await hass.async_add_executor_job(os.path.exists, pending)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    # The next start reaches it and clears the old discovery config.
+    monkeypatch.undo()
+    monkeypatch.setattr(migrate, "RETAINED_WAIT", 0)
+    mqtt.async_publish.reset_mock()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    cleared = {c.args[0] for c in mqtt.async_publish.call_args_list
+               if c.args[1] == "" and c.args[3] is True}
+    assert f"homeassistant/select/{OBJ}_sensitivity/config" in cleared
+    assert not await hass.async_add_executor_job(os.path.exists, pending)
+    assert await hass.config_entries.async_unload(entry.entry_id)

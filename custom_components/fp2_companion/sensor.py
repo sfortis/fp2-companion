@@ -64,7 +64,7 @@ class ZonesSensor(Fp2Entity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """What the card draws."""
-        return self._device.zones_attributes()
+        return self._device.zones_attrs
 
 
 class BackupPreviewSensor(Fp2Entity, SensorEntity):
@@ -100,6 +100,11 @@ class CloudStatusSensor(Fp2Entity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = list(STATUS_TEXT)
+    # The automations decide on the state; the session and the last error
+    # need not stay in the history.
+    _unrecorded_attributes = frozenset(
+        {"did", "account", "country", "token_expires", "last_error", "detail"}
+    )
 
     def __init__(self, app: HassFp2Companion, device: Fp2Device) -> None:
         """Set up the sensor."""
@@ -113,7 +118,7 @@ class CloudStatusSensor(Fp2Entity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """The message, the detail and the shared session."""
-        return self._device.status_attributes()
+        return self._device.status_attrs
 
 
 class DevicesSensor(Fp2HubEntity, SensorEntity):
@@ -121,14 +126,16 @@ class DevicesSensor(Fp2HubEntity, SensorEntity):
     of its sign-in form and the session."""
 
     _attr_translation_key = "devices"
-    _unrecorded_attributes = frozenset({"devices", "countries"})
+    _unrecorded_attributes = frozenset(
+        {"devices", "countries", "account", "country", "token_expires"}
+    )
 
     @property
     def native_value(self) -> int:
         """How many FP2s are served."""
-        return len(self._app.devices)
+        return len(self._app.hub_attrs["devices"])
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """The devices, the countries and the session."""
-        return self._app.hub_attributes()
+        return self._app.hub_attrs

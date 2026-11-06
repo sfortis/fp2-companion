@@ -105,6 +105,7 @@ class ZoneSensitivitySelect(Fp2Entity, SelectEntity):
             entity_key=f"{slug}_sensitivity",
         )
         self.range_id = range_id
+        self.zone_name = name
         self._attr_translation_placeholders = {"zone": name}
 
     @property
@@ -135,7 +136,7 @@ class _ZoneSelects:
         self._app = app
         self._device = device
         self._add = async_add_entities
-        self._shown: dict[int, str] = {}
+        self._shown: dict[int, ZoneSensitivitySelect] = {}
         self._pruned = False
 
     def start(self, entry: Fp2CompanionConfigEntry) -> None:
@@ -148,6 +149,12 @@ class _ZoneSelects:
         )
         self._sync()
 
+    async def _async_replace(
+        self, old: ZoneSensitivitySelect, new: ZoneSensitivitySelect
+    ) -> None:
+        await old.async_remove()
+        self._add([new])
+
     @callback
     def _sync(self) -> None:
         device = self._device
@@ -155,17 +162,31 @@ class _ZoneSelects:
         if device.last_read is None:
             return
         zones = {z["rangeId"]: z.get("name") or "" for z in device.detection_zones()}
+        for rid, entity in list(self._shown.items()):
+            if rid in zones and zones[rid] != entity.zone_name:
+                # Renamed in the Aqara app. Home Assistant keeps an entity's
+                # translated name, so the select is added again: the registry
+                # keeps its entity id and every setting, by its unique id.
+                renamed = ZoneSensitivitySelect(self._app, device, rid, zones[rid])
+                self._shown[rid] = renamed
+                self._app.hass.async_create_task(
+                    self._async_replace(entity, renamed), "fp2_companion zone rename"
+                )
         new = [
             ZoneSensitivitySelect(self._app, device, rid, name)
             for rid, name in zones.items()
             if rid not in self._shown
         ]
         for entity in new:
-            self._shown[entity.range_id] = entity.unique_id or ""
+            self._shown[entity.range_id] = entity
         if new:
             self._add(new)
         registry = er.async_get(self._app.hass)
-        gone = {self._shown.pop(rid) for rid in list(self._shown) if rid not in zones}
+        gone = {
+            self._shown.pop(rid).unique_id or ""
+            for rid in list(self._shown)
+            if rid not in zones
+        }
         if not self._pruned:
             # A zone deleted while Home Assistant was down left its select in
             # the registry; the first read finds it.
@@ -178,7 +199,7 @@ class _ZoneSelects:
                 )
                 if e.domain == "select"
                 and e.unique_id.startswith(mine)
-                and e.unique_id not in self._shown.values()
+                and e.unique_id not in {s.unique_id for s in self._shown.values()}
             }
         for unique in gone:
             entity_id = registry.async_get_entity_id("select", DOMAIN, unique)

@@ -17,14 +17,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import logging
+import os
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN, LEGACY_BASE_TOPIC, UNIQUE_ID_PREFIX
+from .const import DOMAIN, LEGACY_BASE_TOPIC, STATE_DIR, UNIQUE_ID_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +37,10 @@ STATE_GONE_TIMEOUT = 10
 # How long the broker cleanup listens for the retained topics of the old
 # versions. A broker sends the retained messages at once on subscribe.
 RETAINED_WAIT = 2
+# Kept in the state folder until the broker cleanup has gone through, with
+# the discovery topics to clear, so a broker that was down is cleared on a
+# later start. Without it the old MQTT entities would come back.
+CLEANUP_PENDING = "mqtt_cleanup_pending.json"
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,7 @@ async def async_migrate_mqtt_entities(hass: HomeAssistant, entry: ConfigEntry) -
         for e in list(registry.entities.values())
         if e.platform == MQTT_DOMAIN and e.unique_id.startswith(UNIQUE_ID_PREFIX)
     ]
+    pending = hass.config.path(STATE_DIR, CLEANUP_PENDING)
     if old:
         kept = [_keep(e) for e in old]
         for e in old:
@@ -69,13 +76,39 @@ async def async_migrate_mqtt_entities(hass: HomeAssistant, entry: ConfigEntry) -
         _remove_mqtt_devices(hass)
         _LOGGER.info("Moved %s MQTT entities of FP2 Companion to native ones", len(kept))
         discovery = [f"{k.domain}/{k.unique_id}/config" for k in kept]
+        await hass.async_add_executor_job(_add_pending, pending, discovery)
+    discovery = await hass.async_add_executor_job(_read_pending, pending)
+    if discovery is not None:
         entry.async_create_background_task(
-            hass, _async_clear_broker(hass, discovery), "fp2_companion clear broker"
+            hass,
+            _async_clear_broker(hass, discovery, pending),
+            "fp2_companion clear broker",
         )
     return len(old)
 
 
+def _add_pending(path: str, discovery: list[str]) -> None:
+    known = _read_pending(path) or []
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(sorted(set(known) | set(discovery)), fh)
+
+
+def _read_pending(path: str) -> list[str] | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return [str(d) for d in json.load(fh)]
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return []
+
+
 def _keep(e: er.RegistryEntry) -> _Kept:
+    # Only what a person chose carries over: an entity disabled because the
+    # MQTT entry was disabled must not stay disabled under this one.
+    disabled_by = e.disabled_by if e.disabled_by is er.RegistryEntryDisabler.USER else None
+    hidden_by = e.hidden_by if e.hidden_by is er.RegistryEntryHider.USER else None
     return _Kept(
         entity_id=e.entity_id,
         domain=e.domain,
@@ -89,8 +122,8 @@ def _keep(e: er.RegistryEntry) -> _Kept:
             "categories": dict(e.categories),
         },
         options={k: dict(v) for k, v in e.options.items()},
-        disabled_by=e.disabled_by,
-        hidden_by=e.hidden_by,
+        disabled_by=disabled_by,
+        hidden_by=hidden_by,
     )
 
 
@@ -108,6 +141,12 @@ async def _async_states_gone(hass: HomeAssistant, entity_ids: list[str]) -> None
 
 @callback
 def _recreate(registry: er.EntityRegistry, entry: ConfigEntry, k: _Kept) -> None:
+    if registry.async_get_entity_id(k.domain, DOMAIN, k.unique_id) is not None:
+        # The native entity exists already: this MQTT one is a duplicate an
+        # uncleared broker brought back, and removing it was all there was
+        # to do. The native entity keeps its id and its settings.
+        _LOGGER.info("Removed %s, a duplicate of a native entity", k.entity_id)
+        return
     object_id = k.entity_id.split(".", 1)[1]
     new = registry.async_get_or_create(
         k.domain,
@@ -147,12 +186,23 @@ def _remove_mqtt_devices(hass: HomeAssistant) -> None:
             devices.async_remove_device(device.id)
 
 
-async def _async_clear_broker(hass: HomeAssistant, discovery: list[str]) -> None:
+async def _async_clear_broker(
+    hass: HomeAssistant, discovery: list[str], pending: str
+) -> None:
     """Clear what the old versions left retained on the broker: the discovery
     configs (`discovery`, under the MQTT discovery prefix) and everything
-    under their topic prefix. Only while MQTT is set up; best effort, since
-    nothing here depends on it."""
+    under their topic prefix. The pending file goes once that went through;
+    while MQTT is not set up or the broker cannot be reached it stays, and
+    the next start tries again."""
+    if not hass.config_entries.async_entries(MQTT_DOMAIN):
+        # No MQTT at all, so no broker holds anything of the old versions.
+        await hass.async_add_executor_job(_remove_pending, pending)
+        return
     if MQTT_DOMAIN not in hass.config.components:
+        _LOGGER.info(
+            "MQTT is not loaded, so the old FP2 Companion topics stay on the "
+            "broker until a later start"
+        )
         return
     from homeassistant.components import mqtt  # noqa: PLC0415
 
@@ -168,6 +218,8 @@ async def _async_clear_broker(hass: HomeAssistant, discovery: list[str]) -> None
             topics.add(msg.topic)
 
     try:
+        if not await mqtt.async_wait_for_mqtt_client(hass):
+            raise ConnectionError("the MQTT client did not connect")
         unsubscribe = await mqtt.async_subscribe(
             hass, f"{LEGACY_BASE_TOPIC}/#", received
         )
@@ -176,7 +228,18 @@ async def _async_clear_broker(hass: HomeAssistant, discovery: list[str]) -> None
         for topic in sorted(topics):
             await mqtt.async_publish(hass, topic, "", 0, True)
     except Exception as exc:  # noqa: BLE001
-        _LOGGER.debug("Could not clear the old FP2 Companion topics: %s", exc)
+        _LOGGER.warning(
+            "Could not clear the old FP2 Companion topics from the broker, "
+            "trying again at the next start: %s",
+            exc,
+        )
         return
-    if topics:
-        _LOGGER.info("Cleared %s retained FP2 Companion topics", len(topics))
+    await hass.async_add_executor_job(_remove_pending, pending)
+    _LOGGER.info("Cleared %s retained FP2 Companion topics", len(topics))
+
+
+def _remove_pending(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass

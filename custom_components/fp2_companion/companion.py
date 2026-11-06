@@ -204,6 +204,7 @@ class Fp2Device:
         self.learning_until = None
         self.status = STATUS_STARTING
         self.status_detail = None
+        self._snapshot()
 
     # ------------------------------------------------------------ commands
     # The entities and the card call these on the app's worker thread.
@@ -293,7 +294,7 @@ class Fp2Device:
 
     def _backup_if_changed(self, zones):
         folder = self.info["backup_dir"]
-        rows = list_backups(folder)
+        rows = list_backups(folder, limit=1)
         if rows:
             try:
                 latest = read_backup(folder, rows[0]["name"])["zones"]
@@ -656,10 +657,17 @@ class Fp2Device:
     # ------------------------------------------------------------- state
     # What the entities show. They read it on Home Assistant's event loop
     # after `_changed`; every value here is replaced whole, never mutated in
-    # place, so a read never sees half of an update.
+    # place, so a read never sees half of an update. The attributes that need
+    # the disk (the backups, the session) are built here on the worker, so
+    # the event loop never reads a file.
 
     def _changed(self):
+        self._snapshot()
         self.app.changed(self.key)
+
+    def _snapshot(self):
+        self.status_attrs = self.status_attributes()
+        self.zones_attrs = self.zones_attributes()
 
     def _set_status(self, code, detail=None):
         self.status = code
@@ -718,7 +726,7 @@ class Fp2Device:
             "sensor": dict(zip(("col", "row"), to_grid(0, 0))),
             "zones": self.zones,
             "tags": self.app.zone_tags,
-            "backups": list_backups(self.info["backup_dir"])[:BACKUPS_SHOWN],
+            "backups": list_backups(self.info["backup_dir"], limit=BACKUPS_SHOWN),
             "last_read": _iso(self.last_read),
         }
 
@@ -777,6 +785,7 @@ class Fp2Companion:
         self._retry = None
         self.session = self._make_cloud("")
         self.tracker = self._make_tracker()
+        self.hub_attrs = self.hub_attributes()
 
         self.run_in(self._check_old_card, 1)
         self.run_daily(self.token_check, a.get("token_check_time", "04:10:00"))
@@ -825,7 +834,7 @@ class Fp2Companion:
             self._retry = None
         known = set(self.devices)
         found = self.discover()
-        self.changed(None)
+        self._hub_changed()
         if not found:
             self.log("no FP2 found in Home Assistant yet; trying again later",
                      level="WARNING")
@@ -886,18 +895,22 @@ class Fp2Companion:
         for device in self.devices.values():
             device._changed()
         # The hub carries the expiry too, and a refresh just moved it.
-        self.changed(None)
+        self._hub_changed()
 
     def session_lost(self):
         for device in self.devices.values():
             device.values = {}
             device._set_status(STATUS_NO_SESSION)
-        self.changed(None)
+        self._hub_changed()
 
     def session_info(self):
         """The shared session, from ONE read of the file: every device's
         status carries it, so N devices would otherwise read it 4N times."""
-        session = self.session.store.load() or {}
+        try:
+            session = self.session.store.load() or {}
+        except (OSError, ValueError) as exc:
+            self.log(f"session file not readable: {exc}", level="WARNING")
+            session = {}
         token = session.get("token")
         return {"signed_in": bool(token),
                 "account": mask_account(session.get("account")) if token else None,
@@ -934,7 +947,7 @@ class Fp2Companion:
                                         "reason": exc.message})
                 return
         self.log(f"signed in as {mask_account(account)}")
-        self.changed(None)
+        self._hub_changed()
         for device in self.devices.values():
             device.last_error = None
             device.read_all()
@@ -953,6 +966,10 @@ class Fp2Companion:
         self.start()
 
     # ------------------------------------------------------------- hub
+    def _hub_changed(self):
+        self.hub_attrs = self.hub_attributes()
+        self.changed(None)
+
     def hub_attributes(self):
         """What the app itself shows: the devices for the card's dropdown,
         the countries for its sign-in form, and the session."""

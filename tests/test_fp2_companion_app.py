@@ -265,7 +265,8 @@ def status(world, key=KEY):
 
 
 def zone_attrs(world):
-    return dev(world).zones_attributes()
+    """What the zones sensor shows, as the worker built it last."""
+    return dev(world).zones_attrs
 
 
 def preview_name(world):
@@ -960,7 +961,8 @@ BLOB = "QkxPQg==" * 20
 
 
 def attrs(world):
-    return dev(world).status_attributes()
+    """What the cloud status sensor shows, as the worker built it last."""
+    return dev(world).status_attrs
 
 
 def test_the_account_is_shown_partly_hidden(fp2):
@@ -1098,7 +1100,7 @@ def test_a_command_reaches_only_its_device(fp2):
 
 def test_the_hub_lists_the_devices_and_the_countries(fp2):
     app, world, _ = two(fp2)
-    hub = app.hub_attributes()
+    hub = app.hub_attrs
     # In serial order.
     assert [(d["key"], d["prefix"]) for d in hub["devices"]] == [
         (KEY, PREFIX), ("54ef44d4e5f6", "presence_sensor_fp2_e5f6")]
@@ -1318,3 +1320,25 @@ def test_no_old_card_copy_logs_nothing(fp2, tmp_path):
     before = list(world.logs)
     app._check_old_card()
     assert world.logs == before
+
+
+def test_a_session_file_that_does_not_parse_reads_as_signed_out(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    (tmp_path / "session.json").write_text("{not json")
+    app.session.store.load = lambda: json.loads("{not json")
+    app.token_check()
+    assert app.hub_attrs["signed_in"] is False
+    assert any("session file not readable" in line for line in world.logs)
+
+
+def test_the_card_sees_only_the_newest_backups(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    mod = fp2.mod
+    folder = tmp_path / "backups" / DID
+    for i in range(mod.BACKUPS_SHOWN + 5):
+        (folder / f"zones-2026110{i // 10}T0000{i % 10:02d}.json").write_text(
+            json.dumps({"zones": [], "saved_at": i, "reason": "changed"}))
+    cmd(app, "refresh")
+    assert len(zone_attrs(world)["backups"]) == mod.BACKUPS_SHOWN

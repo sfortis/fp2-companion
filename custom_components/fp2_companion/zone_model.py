@@ -562,14 +562,15 @@ def write_backup(directory, zones, now, reason):
     return name
 
 
-def list_backups(directory):
-    """Every backup, newest first, as the card shows them."""
+def list_backups(directory, limit=None):
+    """The backups, newest first, as the card shows them; only the newest
+    `limit` are read when it is given."""
     try:
         names = [n for n in os.listdir(directory) if BACKUP_NAME.match(n)]
     except FileNotFoundError:
         return []
     rows = []
-    for name in sorted(names, reverse=True):
+    for name in sorted(names, reverse=True)[:limit]:
         try:
             body = read_backup(directory, name)
         except (OSError, ValueError):
