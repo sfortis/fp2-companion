@@ -62,7 +62,8 @@ async def async_migrate_mqtt_entities(hass: HomeAssistant, entry: ConfigEntry) -
     registry = er.async_get(hass)
     old = [
         e
-        for e in list(registry.entities.values())
+        for mqtt_entry in hass.config_entries.async_entries(MQTT_DOMAIN)
+        for e in er.async_entries_for_config_entry(registry, mqtt_entry.entry_id)
         if e.platform == MQTT_DOMAIN and e.unique_id.startswith(UNIQUE_ID_PREFIX)
     ]
     pending = hass.config.path(STATE_DIR, CLEANUP_PENDING)
@@ -73,9 +74,10 @@ async def async_migrate_mqtt_entities(hass: HomeAssistant, entry: ConfigEntry) -
         await _async_states_gone(hass, [k.entity_id for k in kept])
         for k in kept:
             _recreate(registry, entry, k)
-        _remove_mqtt_devices(hass)
         _LOGGER.info("Moved %s MQTT entities of FP2 Companion to native ones", len(kept))
-        discovery = [f"{k.domain}/{k.unique_id}/config" for k in kept]
+    removed = _remove_mqtt_devices(hass)
+    if old or removed:
+        discovery = [f"{k.domain}/{k.unique_id}/config" for k in kept] if old else []
         await hass.async_add_executor_job(_add_pending, pending, discovery)
     discovery = await hass.async_add_executor_job(_read_pending, pending)
     if discovery is not None:
@@ -174,16 +176,21 @@ def _recreate(registry: er.EntityRegistry, entry: ConfigEntry, k: _Kept) -> None
 
 
 @callback
-def _remove_mqtt_devices(hass: HomeAssistant) -> None:
-    """The MQTT devices the old entities sat on: "<FP2> Settings" and
-    "FP2 Companion"."""
+def _remove_mqtt_devices(hass: HomeAssistant) -> int:
+    """Remove the MQTT devices the old entities sat on, "<FP2> Settings" and
+    "FP2 Companion". Returns how many were removed. Runs on every setup, so a
+    move that stopped halfway still ends with them gone."""
     devices = dr.async_get(hass)
-    for device in list(devices.devices.values()):
-        if any(
-            domain == MQTT_DOMAIN and str(ident).startswith("fp2_companion")
-            for domain, ident in device.identifiers
-        ):
-            devices.async_remove_device(device.id)
+    removed = 0
+    for mqtt_entry in hass.config_entries.async_entries(MQTT_DOMAIN):
+        for device in dr.async_entries_for_config_entry(devices, mqtt_entry.entry_id):
+            if any(
+                item[0] == MQTT_DOMAIN and str(item[1]).startswith("fp2_companion")
+                for item in device.identifiers
+            ):
+                devices.async_remove_device(device.id)
+                removed += 1
+    return removed
 
 
 async def _async_clear_broker(
@@ -214,17 +221,27 @@ async def _async_clear_broker(
 
     @callback
     def received(msg: mqtt.ReceiveMessage) -> None:
-        if msg.retain and msg.payload:
+        if not (msg.retain and msg.payload):
+            return
+        parts = msg.topic.split("/")
+        # Everything under the old prefix, and every discovery config of an
+        # object id the old versions used, also when the list of them was
+        # lost with a move that stopped halfway.
+        if parts[0] == LEGACY_BASE_TOPIC or (
+            len(parts) == 4 and parts[2].startswith(UNIQUE_ID_PREFIX)
+        ):
             topics.add(msg.topic)
 
     try:
         if not await mqtt.async_wait_for_mqtt_client(hass):
             raise ConnectionError("the MQTT client did not connect")
-        unsubscribe = await mqtt.async_subscribe(
-            hass, f"{LEGACY_BASE_TOPIC}/#", received
-        )
+        unsubscribes = [
+            await mqtt.async_subscribe(hass, f"{LEGACY_BASE_TOPIC}/#", received),
+            await mqtt.async_subscribe(hass, f"{prefix}/+/+/config", received),
+        ]
         await asyncio.sleep(RETAINED_WAIT)
-        unsubscribe()
+        for unsubscribe in unsubscribes:
+            unsubscribe()
         for topic in sorted(topics):
             await mqtt.async_publish(hass, topic, "", 0, True)
     except Exception as exc:  # noqa: BLE001
