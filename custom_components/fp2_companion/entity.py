@@ -61,6 +61,10 @@ class Fp2Entity(Entity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    # A setting is unavailable while the cloud cannot read or write it. The
+    # status, the zones and Refresh stay available, so they can say why and
+    # try again.
+    _needs_cloud = True
 
     def __init__(
         self,
@@ -78,6 +82,11 @@ class Fp2Entity(Entity):
         # Only a suggestion: an entity already in the registry keeps its id.
         self.entity_id = f"{domain}.{device.info['prefix']}_{entity_key or key}"
         self._attr_device_info = device_info(device)
+
+    @property
+    def available(self) -> bool:
+        """See _needs_cloud."""
+        return not self._needs_cloud or self._device.reachable
 
     async def async_added_to_hass(self) -> None:
         """Follow the device's changes."""

@@ -19,7 +19,7 @@ import itertools
 import logging
 from typing import Any
 
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import (
@@ -28,6 +28,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.util.async_ import run_callback_threadsafe
 
+from .aqara_cloud import did_from_serial
 from .companion import Fp2Companion
 
 _LOGGER = logging.getLogger(__package__)
@@ -44,6 +45,9 @@ HOMEKIT_DOMAIN = "homekit_controller"
 # How long the worker waits for the event loop to read the registries. The
 # loop answers in milliseconds; this only bounds a stall.
 LOOP_TIMEOUT = 30
+# How long after HomeKit Device adds an FP2 the app looks for it, so the
+# several registry updates of one pairing make one rescan.
+RESCAN_DELAY = 10
 
 LiveListener = Callable[[dict[str, Any]], None]
 
@@ -64,6 +68,8 @@ class HassFp2Companion(Fp2Companion):
         self._worker = ThreadPoolExecutor(1, thread_name_prefix="fp2_companion")
         self._handles = itertools.count(1)
         self._timers: dict[int, CALLBACK_TYPE] = {}
+        self._unlisten: CALLBACK_TYPE | None = None
+        self._rescan: CALLBACK_TYPE | None = None
         self._stopping = False
         self._stopped = False
 
@@ -71,6 +77,46 @@ class HassFp2Companion(Fp2Companion):
     async def async_start(self) -> None:
         """Run `initialize` on the worker. An error fails the setup."""
         await self.hass.loop.run_in_executor(self._worker, self.initialize)
+        self._unlisten = self.hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._device_registry_updated
+        )
+
+    @callback
+    def _device_registry_updated(self, event: Event[dr.EventDeviceRegistryUpdatedData]) -> None:
+        """An FP2 that HomeKit Device adds after setup is served without a
+        reload: the app looks for devices again shortly after."""
+        if event.data["action"] not in ("create", "update") or self._stopping:
+            return
+        device = dr.async_get(self.hass).async_get(event.data["device_id"])
+        if device is None or not (
+            isinstance(device.model, str) and device.model.startswith("PS-")
+        ):
+            return
+        if not self._is_homekit(device):
+            return
+        try:
+            did = did_from_serial(device.serial_number)
+        except ValueError:
+            return
+        if any(d.info["did"] == did for d in list(self.devices.values())):
+            return
+        if self._rescan is None:
+
+            @callback
+            def fire(_now: datetime) -> None:
+                self._rescan = None
+                self.submit(self.rescan)
+
+            self._rescan = async_call_later(self.hass, RESCAN_DELAY, fire)
+
+    @callback
+    def _is_homekit(self, device: dr.DeviceEntry) -> bool:
+        homekit = {
+            e.entry_id for e in self.hass.config_entries.async_entries(HOMEKIT_DOMAIN)
+        }
+        if hasattr(device, "config_entry_id"):
+            return device.config_entry_id in homekit
+        return bool(set(device.config_entries) & homekit)
 
     async def async_stop(self) -> None:
         """Stop every timer, then let the app close."""
@@ -78,6 +124,10 @@ class HassFp2Companion(Fp2Companion):
             return
         self._stopped = True
         self._stopping = True
+        for cancel_listener in (self._unlisten, self._rescan):
+            if cancel_listener is not None:
+                cancel_listener()
+        self._unlisten = self._rescan = None
         for cancel in self._timers.values():
             cancel()
         self._timers.clear()

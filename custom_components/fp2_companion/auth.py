@@ -78,6 +78,15 @@ def sign_in(
         raise SignInFailed(SignInError.REFUSED, exc.code, exc.message) from exc
 
 
+def has_session(state_dir: str) -> bool:
+    """Whether the session file holds a session the client can use."""
+    try:
+        session = SessionStore(os.path.join(state_dir, SESSION_NAME)).load() or {}
+    except (OSError, ValueError):
+        return False
+    return bool(session.get("token") and session.get("user_id"))
+
+
 def sign_out(state_dir: str) -> None:
     """Forget the token when the integration is removed. The PhoneId stays,
     so adding it again is the same phone to Aqara and the account does not

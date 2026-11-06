@@ -626,3 +626,148 @@ def test_a_saved_session_is_private_and_leaves_no_temporary_file(tmp_path):
     assert ((folder / "session.json").stat().st_mode & 0o777) == 0o600
     assert sorted(p.name for p in folder.iterdir()) == ["session.json"]
     assert store.load() == {"token": "u"}
+
+
+# ------------------------------------------------------- refusals and failures
+@pytest.mark.parametrize("exp", ["soon", True, None])
+def test_a_jwt_whose_expiry_is_not_a_number_has_no_expiry(exp):
+    assert jwt_exp(jwt(exp)) is None
+
+
+def test_a_session_that_cannot_be_written_keeps_the_old_one(store, tmp_path):
+    with pytest.raises(TypeError):
+        store.save({"token": object()})
+    assert os.listdir(tmp_path) == ["session.json"]
+    assert store.load()["token"] == TOKEN_1
+
+
+def test_a_failed_save_raises_its_own_error_when_the_cleanup_fails(
+        store, monkeypatch):
+    def cannot_remove(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(aqara_cloud.os, "remove", cannot_remove)
+    with pytest.raises(TypeError):
+        store.save({"token": object()})
+
+
+class FakeResponse:
+    status = 200
+
+    def __init__(self, body):
+        self.body = body
+        self.limits = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, limit):
+        self.limits.append(limit)
+        return self.body
+
+
+def test_the_default_transport_follows_no_redirect(monkeypatch):
+    """The real transport, with urllib's opener replaced, so nothing leaves
+    the machine. A redirect would carry the signed headers elsewhere."""
+    opened = []
+    response = FakeResponse(b'{"code": 0}')
+
+    class Opener:
+        def __init__(self, *handlers):
+            self.handlers = handlers
+
+        def open(self, request, timeout):
+            opened.append((self, request, timeout))
+            return response
+
+    monkeypatch.setattr(aqara_cloud, "build_opener", Opener)
+    status, body = aqara_cloud._urllib_transport(
+        "POST", "https://example.com/app/v1.0/lumi/res/write",
+        {"Token": "t"}, b"{}", 7)
+    assert (status, body) == (200, b'{"code": 0}')
+    opener, request, timeout = opened[0]
+    assert (request.get_method(), request.data, timeout) == ("POST", b"{}", 7)
+    assert request.get_header("Token") == "t"
+    assert response.limits == [4 * 1024 * 1024]
+    (handler,) = opener.handlers
+    assert handler.redirect_request(request, None, 302, "Found", {},
+                                    "https://example.com/elsewhere") is None
+
+
+def test_an_http_error_status_is_answered_with_its_body(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+
+    class Opener:
+        def __init__(self, *handlers):
+            pass
+
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, 502, "Bad Gateway", {},
+                            io.BytesIO(b"<html>bad gateway</html>"))
+
+    monkeypatch.setattr(aqara_cloud, "build_opener", Opener)
+    assert aqara_cloud._urllib_transport(
+        "GET", "https://example.com/x", {}, None, 7) == (
+            502, b"<html>bad gateway</html>")
+
+
+def test_a_sign_in_without_an_account_sends_nothing(store):
+    t = FakeTransport()
+    with pytest.raises(AqaraRefused):
+        client(store, t).login("  ", encrypted_password=BLOB, country="GR")
+    assert t.requests == []
+
+
+def test_a_sign_in_answer_without_a_session_keeps_the_old_one(store):
+    t = FakeTransport().reply(result={"userId": "user-2"})
+    with pytest.raises(AqaraAuthError):
+        client(store, t).login("a@example.com", encrypted_password=BLOB,
+                               country="GR")
+    assert store.load()["token"] == TOKEN_1
+
+
+def test_signed_in_follows_the_token_on_disk(store):
+    c = client(store, FakeTransport())
+    assert c.signed_in() is True
+    c.logout()
+    assert c.signed_in() is False
+
+
+def test_a_zone_list_that_is_not_a_list_is_an_error(store):
+    t = FakeTransport().reply(result={"rangeId": 3})
+    with pytest.raises(AqaraError) as exc:
+        client(store, t).list_zones()
+    assert "expected a list" in exc.value.message
+
+
+def test_another_error_after_a_refresh_is_raised_as_it_came(store):
+    t = FakeTransport()
+    t.reply(code=CODE_TOKEN_EXPIRED)
+    t.reply(result={"token": TOKEN_2})
+    t.reply(code=302, message="Params error")
+    with pytest.raises(AqaraError) as exc:
+        client(store, t).write_rid("14.1.85", "2")
+    assert not isinstance(exc.value, AqaraAuthError)
+    assert exc.value.code == 302
+
+
+def test_no_app_identity_for_the_region_sends_nothing(store):
+    t = FakeTransport()
+    c = AqaraCloud(store, None, None, DID, transport=t, clock=lambda: NOW)
+    with pytest.raises(AqaraRefused):
+        c.list_zones()
+    assert t.requests == []
+
+
+def test_an_answer_that_is_not_an_object_is_an_aqara_error(store):
+    with pytest.raises(AqaraError) as exc:
+        client(store, lambda *_a: (200, b"[1, 2]")).list_zones()
+    assert exc.value.message == "http 200, unexpected body"
+
+
+def test_a_region_without_a_built_in_pair_has_none():
+    assert regions.identity_for("XX") is None

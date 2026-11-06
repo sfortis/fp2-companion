@@ -16,8 +16,12 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv, issue_registry as ir
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    issue_registry as ir,
+)
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -35,7 +39,7 @@ from .const import (
     ISSUE_APPDAEMON_APP,
     STATE_DIR,
 )
-from .auth import parse_identities, sign_out
+from .auth import has_session, parse_identities, sign_out
 from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
 from .websocket_api import async_setup as async_setup_websocket_api
@@ -75,12 +79,20 @@ async def async_setup_entry(
             translation_placeholders={"path": old_app},
         )
         raise ConfigEntryNotReady(
-            f"The AppDaemon app of FP2 Companion is still in {old_app}"
+            translation_domain=DOMAIN,
+            translation_key="appdaemon_app_installed",
+            translation_placeholders={"path": old_app},
         )
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
     state_dir = hass.config.path(STATE_DIR)
     await hass.async_add_executor_job(_prepare_state, state_dir)
     await async_migrate_mqtt_entities(hass, entry)
+    # Without a session nothing can be read: Home Assistant asks for a
+    # sign-in (the reauth flow) instead of starting an app that cannot work.
+    if not await hass.async_add_executor_job(has_session, state_dir):
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="no_session"
+        )
 
     app = HassFp2Companion(hass, entry.entry_id, _app_args(hass, entry, state_dir))
     entry.runtime_data = app
@@ -123,6 +135,18 @@ async def async_remove_entry(
         await hass.async_add_executor_job(sign_out, hass.config.path(STATE_DIR))
     except (OSError, ValueError) as exc:
         _LOGGER.warning("Could not clear the Aqara session: %s", exc)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: Fp2CompanionConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """A person may remove the settings device of an FP2 this integration
+    no longer serves (gone from HomeKit, excluded, or off the account), but
+    not one it serves or the integration's own."""
+    app = entry.runtime_data
+    served = {d.info["did"] for d in app.devices.values()}
+    ids = {ident for domain, ident in device.identifiers if domain == DOMAIN}
+    return bool(ids) and entry.entry_id not in ids and not ids & served
 
 
 async def _async_options_updated(

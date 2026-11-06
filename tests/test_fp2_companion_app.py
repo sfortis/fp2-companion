@@ -1265,3 +1265,204 @@ def test_a_lost_session_asks_home_assistant_for_a_sign_in(fp2):
     app.cloud_fake.fail = AqaraAuthError("res/write", 108, "expired")
     cmd(app, "refresh")
     assert world.signed_out >= 1
+
+
+def test_a_lost_cloud_is_logged_once_and_its_return_once(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    cmd(app, "refresh")
+    cmd(app, "refresh")
+    cmd(app, "refresh")
+    assert sum("cloud call failed" in line for line in world.logs) == 1
+    assert dev(world).reachable is False
+    app.cloud_fake.fail = None
+    cmd(app, "refresh")
+    assert sum("answers again" in line for line in world.logs) == 1
+    assert dev(world).reachable is True
+
+
+# ------------------------------------------------------- refusals and failures
+def raises(exc):
+    """A cloud call that fails with `exc`."""
+    def call(*_args, **_kwargs):
+        raise exc
+    return call
+
+
+def test_parse_discovery_skips_an_fp2_with_a_bad_serial_and_a_bad_yaml_serial(fp2):
+    rows = [dict(LIVING, serial="not a serial"), OFFICE]
+    found = fp2.mod.parse_discovery(rows, manual=["54EF44", "54EF44A1B2CG"])
+    assert [d["key"] for d in found] == ["54ef44d4e5f6"]
+
+
+def test_a_backup_that_goes_away_before_it_is_read_is_followed_by_a_new_one(
+        fp2, monkeypatch):
+    """The newest backup can be deleted between its listing and its read, by
+    a person cleaning the folder; the zones are then backed up again."""
+    app, world = fp2()
+    app.start()
+
+    def gone(folder, name):
+        raise FileNotFoundError(name)
+
+    monkeypatch.setattr(fp2.mod, "read_backup", gone)
+    app._now = lambda: 1793350060.0
+    cmd(app, "refresh")
+    rows = zone_attrs(world)["backups"]
+    assert [r["reason"] for r in rows] == ["changed", "first-read"]
+
+
+def test_a_write_the_client_refuses_is_reported_and_not_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.write_rid = raises(AqaraRefused("'5' is not a value"))
+    cmd(app, "approach_distance", "Close")
+    assert status(world) == "refused"
+    assert attrs(world)["detail"]["reason"] == "'5' is not a value"
+    assert len(world.timers) == timers
+
+
+def test_a_write_the_cloud_fails_is_reported_and_not_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.write_rid = raises(AqaraError("res/write", None, "timeout"))
+    cmd(app, "ai_detection", "on")
+    assert status(world) == "cloud_error"
+    assert attrs(world)["last_error"]["endpoint"] == "res/write"
+    assert len(world.timers) == timers
+
+
+def test_a_readback_that_cannot_read_does_not_judge_the_write(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "sensitivity", "Medium")
+    app.cloud_fake.fail = AqaraError("res/query/by/resourceId", None, "timeout")
+    app.devices[KEY]._verify_write({"rid": "14.1.85", "value": "2"})
+    assert status(world) == "cloud_error"
+    assert attrs(world)["detail"] is None
+
+
+def test_a_zone_readback_that_cannot_read_does_not_judge_the_write(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", json.dumps({"name": "Desk", "blockList": [15]}))
+    app.cloud_fake.fail = AqaraError("devex/radar/range/list", None, "timeout")
+    fire(world)
+    assert status(world) == "cloud_error"
+
+
+def test_ai_learning_the_cloud_rejects_starts_no_count(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.write_rid = raises(AqaraError("res/write", 302, "Params error"))
+    cmd(app, "ai_learning", "PRESS")
+    assert status(world) == "cloud_error"
+    assert attrs(world)["learning_until"] is None
+
+
+@pytest.mark.parametrize("range_id, label", [("abc", "High"), ("3", "Maximum"),
+                                             (True, "High")])
+def test_a_zone_sensitivity_for_a_bad_zone_or_label_is_refused(fp2, range_id,
+                                                               label):
+    app, world = fp2()
+    app.start()
+    dev(world).set_zone_sensitivity(range_id, label)
+    assert app.cloud_fake.zone_writes == []
+    assert status(world) == "refused"
+
+
+def test_a_zone_set_that_is_not_an_object_is_refused(fp2):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_set", "not json")
+    assert app.cloud_fake.zone_writes == []
+    assert attrs(world)["detail"]["reason"] == "zone_set needs a JSON object"
+
+
+@pytest.mark.parametrize("error, shown", [
+    (AqaraRefused("not a zone of this device"), "refused"),
+    (AqaraError("devex/radar/range/set", None, "timeout"), "cloud_error")])
+def test_a_zone_write_that_fails_is_reported_and_not_read_back(fp2, error,
+                                                               shown):
+    app, world = fp2()
+    app.start()
+    timers = len(world.timers)
+    app.cloud_fake.set_zone = raises(error)
+    cmd(app, "zone_set", json.dumps({"rangeId": 3, "name": "Sofa"}))
+    assert status(world) == shown
+    assert len(world.timers) == timers
+
+
+def test_the_edge_becomes_a_detection_zone_of_the_type_the_card_chose(fp2):
+    app, world = with_edge(fp2)
+    cmd(app, "zone_set", json.dumps({"rangeId": 103, "regionType": 0,
+                                     "name": "Bed", "blockList": [1, 2, 3],
+                                     "tagId": "3.6"}))
+    sent = app.cloud_fake.zone_writes[-1]
+    assert (sent["tagId"], sent["tagName"]) == ("3.6", "Bed")
+
+
+@pytest.mark.parametrize("range_id", [True, -1, "x", None, 1.5])
+def test_a_zone_delete_without_a_valid_range_id_is_refused(fp2, range_id):
+    app, world = fp2()
+    app.start()
+    dev(world).zone_delete(range_id)
+    assert app.cloud_fake.deletes == []
+    assert status(world) == "refused"
+
+
+def test_a_zone_delete_by_an_int_range_id_is_sent(fp2):
+    app, world = fp2()
+    app.start()
+    dev(world).zone_delete(1)
+    assert app.cloud_fake.deletes == [[1]]
+
+
+def test_a_delete_of_a_zone_that_is_gone_is_refused(fp2, tmp_path):
+    app, world = fp2()
+    app.start()
+    cmd(app, "zone_delete", "9")
+    assert app.cloud_fake.deletes == []
+    assert refusal_code(world) == "range_id"
+    assert backups(tmp_path) == ["first-read"]
+
+
+def test_a_delete_the_cloud_fails_is_reported(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.delete_zones = raises(
+        AqaraError("devex/radar/range/delete", None, "timeout"))
+    cmd(app, "zone_delete", "1")
+    assert status(world) == "cloud_error"
+
+
+def test_a_restore_the_cloud_fails_partway_is_read_back(fp2):
+    app, world = fp2()
+    app.start()
+    first = zone_attrs(world)["backups"][0]["name"]
+    app.cloud_fake.zones.append(zone(4, "Desk", 0, 1, [15, 16]))
+    app.cloud_fake.delete_zones = raises(
+        AqaraError("devex/radar/range/delete", None, "timeout"))
+    cmd(app, "restore", first)
+    assert status(world) == "cloud_error"
+    assert world.timers[-1]["callback"] == app.devices[KEY].read_all
+
+
+def test_a_zone_that_is_not_there_has_no_sensitivity(fp2):
+    app, world = fp2()
+    app.start()
+    assert dev(world).zone_sensitivity(9) is None
+
+
+def test_a_token_check_without_a_session_asks_for_a_sign_in(fp2):
+    app, world = fp2()
+    app.start()
+    app.cloud_fake.ensure_fresh = raises(
+        AqaraAuthError("user/refresh-token", 108, "expired"))
+    app.token_check()
+    assert status(world) == "no_session"
+    assert world.signed_out == 1
+    assert any("token check failed" in line for line in world.logs)

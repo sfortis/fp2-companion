@@ -39,6 +39,7 @@ class RefreshButton(Fp2Entity, ButtonEntity):
     polls the cloud, so this is how a change made in the Aqara app shows."""
 
     _attr_translation_key = "refresh"
+    _needs_cloud = False
 
     def __init__(self, app: HassFp2Companion, device: Fp2Device) -> None:
         """Set up the button."""

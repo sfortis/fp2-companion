@@ -270,6 +270,8 @@ class Fp2Device:
         self.zones = zones
         self.last_read = self.app._now()
         self._backup_if_changed(zones)
+        if self.status == STATUS_CLOUD_ERROR:
+            self.app.log(f"{self.info['name']}: the Aqara cloud answers again")
         self._set_status(STATUS_OK)
         return True
 
@@ -627,8 +629,11 @@ class Fp2Device:
     def _cloud_failed(self, exc):
         self.last_error = {"endpoint": exc.endpoint, "code": exc.code,
                            "message": exc.message, "at": self.app._now()}
-        self.app.log(f"{self.info['name']}: cloud call failed: {exc}",
-                     level="WARNING")
+        # Once when the cloud is lost, not on every call while it stays
+        # lost; the recovery is logged once by read_all.
+        if self.status not in (STATUS_CLOUD_ERROR, STATUS_NO_SESSION):
+            self.app.log(f"{self.info['name']}: cloud call failed: {exc}",
+                         level="WARNING")
         if isinstance(exc, AqaraAuthError):
             self.app.session_lost()
         else:
@@ -653,6 +658,13 @@ class Fp2Device:
         self.status = code
         self.status_detail = detail
         self._changed()
+
+    @property
+    def reachable(self):
+        """Whether the settings can be read and written now: a session, the
+        device on the account, and a cloud that answered the last call."""
+        return bool(self.values) and self.status not in (
+            STATUS_NO_SESSION, STATUS_NOT_ON_ACCOUNT, STATUS_CLOUD_ERROR)
 
     @property
     def sensitivity(self):

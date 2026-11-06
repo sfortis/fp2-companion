@@ -46,6 +46,7 @@ class ZonesSensor(Fp2Entity, SensorEntity):
     and the newest backups, which the card draws."""
 
     _attr_translation_key = "zones"
+    _needs_cloud = False
     # The card reads these from the state; the recorder need not keep them.
     _unrecorded_attributes = frozenset({"zones", "tags", "backups", "grid", "sensor"})
 
@@ -71,6 +72,7 @@ class CloudStatusSensor(Fp2Entity, SensorEntity):
     automations decide on the code, never on the message beside it."""
 
     _attr_translation_key = "cloud_status"
+    _needs_cloud = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = list(STATUS_TEXT)

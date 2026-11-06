@@ -110,8 +110,11 @@ class ZoneSensitivitySelect(Fp2Entity, SelectEntity):
 
     @property
     def available(self) -> bool:
-        """Only while the zone is there."""
-        return self._device.zone_sensitivity(self.range_id) is not None
+        """Only while the zone is there and the cloud answers."""
+        return (
+            self._device.reachable
+            and self._device.zone_sensitivity(self.range_id) is not None
+        )
 
     @property
     def current_option(self) -> str | None:

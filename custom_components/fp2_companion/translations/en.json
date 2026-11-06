@@ -141,5 +141,13 @@
         "name": "Devices"
       }
     }
+  },
+  "exceptions": {
+    "no_session": {
+      "message": "Not signed in to Aqara. Sign in again to start Aqara FP2 Companion."
+    },
+    "appdaemon_app_installed": {
+      "message": "The AppDaemon app of Aqara FP2 Companion is still in {path}. Remove it first."
+    }
   }
 }

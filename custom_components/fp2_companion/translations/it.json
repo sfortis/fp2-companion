@@ -141,5 +141,13 @@
         "name": "Dispositivi"
       }
     }
+  },
+  "exceptions": {
+    "no_session": {
+      "message": "Accesso ad Aqara non effettuato. Accedi di nuovo per avviare Aqara FP2 Companion."
+    },
+    "appdaemon_app_installed": {
+      "message": "L'app AppDaemon di Aqara FP2 Companion è ancora in {path}. Rimuovila prima."
+    }
   }
 }

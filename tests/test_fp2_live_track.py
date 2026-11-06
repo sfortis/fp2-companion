@@ -4,8 +4,11 @@ The socket and the cloud are fakes and the loop runs in the test's own event
 loop, so nothing here opens a connection or a thread.
 """
 import asyncio
+import enum
 import json
+import sys
 import threading
+import types
 
 import pytest
 
@@ -354,3 +357,243 @@ def test_no_heartbeat_goes_to_a_refused_device():
     t.lease(DID, "tab-1")
     run(t)
     assert not [c for c in cloud.calls if c[0] == "heartbeat"]
+
+
+# ------------------------------------------------------- the aiohttp adapter
+class FakeAiohttp:
+    """The part of aiohttp the adapter uses, so no socket is opened."""
+
+    class WSMsgType(enum.Enum):
+        TEXT = 1
+        BINARY = 2
+        CLOSE = 8
+        CLOSING = 256
+        CLOSED = 257
+        ERROR = 258
+
+    def __init__(self, messages=(), connect_error=None):
+        self.messages = list(messages)
+        self.connect_error = connect_error
+        self.sessions = []
+        aiohttp = self
+
+        class ClientSession:
+            def __init__(self):
+                self.closed = False
+                self.ws = None
+                aiohttp.sessions.append(self)
+
+            async def ws_connect(self, url, **kwargs):
+                self.connected = (url, kwargs)
+                if aiohttp.connect_error is not None:
+                    raise aiohttp.connect_error
+                self.ws = FakeWs(aiohttp.messages)
+                return self.ws
+
+            async def close(self):
+                self.closed = True
+
+        self.ClientSession = ClientSession
+
+
+class FakeWs:
+    def __init__(self, messages):
+        self.messages = messages
+        self.closed = False
+
+    async def receive(self, timeout):
+        step = self.messages.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+    async def close(self):
+        self.closed = True
+
+
+def ws_message(kind, data=None):
+    return types.SimpleNamespace(type=kind, data=data)
+
+
+def test_the_aiohttp_socket_reads_text_and_closes_both_ends(monkeypatch):
+    fake = FakeAiohttp()
+    kind = FakeAiohttp.WSMsgType
+    fake.messages = [ws_message(kind.TEXT, HELLO), asyncio.TimeoutError(),
+                     ws_message(kind.BINARY, b"x"), ws_message(kind.CLOSED)]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake)
+
+    async def session():
+        received = []
+        async with live_track._aiohttp_connect(
+                "wss://example.com/push", {"Token": "t"}) as ws:
+            for _ in range(3):
+                received.append(await ws.receive_text(1))
+            with pytest.raises(ConnectionError, match="push socket closed"):
+                await ws.receive_text(1)
+        return received
+
+    # A text message, then a quiet tick, then a binary frame read as quiet.
+    assert asyncio.run(session()) == [HELLO, None, None]
+    (http,) = fake.sessions
+    url, kwargs = http.connected
+    assert url == "wss://example.com/push"
+    assert kwargs == {"headers": {"Token": "t"},
+                      "heartbeat": live_track.PING_SECONDS,
+                      "timeout": live_track.CONNECT_TIMEOUT}
+    assert http.ws.closed and http.closed
+
+
+def test_a_failed_aiohttp_connect_closes_the_session(monkeypatch):
+    fake = FakeAiohttp(connect_error=OSError("unreachable"))
+    monkeypatch.setitem(sys.modules, "aiohttp", fake)
+
+    async def session():
+        async with live_track._aiohttp_connect("wss://example.com/push", {}):
+            pass
+
+    with pytest.raises(OSError):
+        asyncio.run(session())
+    assert fake.sessions[0].closed
+
+
+# ------------------------------------------------------- failures in the loop
+def test_a_publish_that_fails_is_logged_and_the_tracker_goes_on():
+    logs = []
+
+    def publish(did, message):
+        raise RuntimeError("no listener")
+
+    t = LiveTracker(lambda did: None, publish, threading.Lock(),
+                    log=lambda text, **k: logs.append(text), clock=Clock())
+    t._emit(DID, {"state": LIVE_WATCHING})
+    assert logs == ["live publish failed: RuntimeError: no listener"]
+    assert t._last_state[DID] == {"state": LIVE_WATCHING}
+
+
+def test_a_session_with_nobody_watching_opens_nothing():
+    t, published, cloud = tracker()
+    asyncio.run(t._session())
+    assert cloud.calls == [] and published == []
+
+
+def test_a_socket_message_that_is_not_json_is_skipped():
+    clock = Clock()
+    t, published, _ = tracker(clock, sockets=[[HELLO, "not json", push(DID)]])
+    t.lease(DID, "tab-1")
+    run(t)
+    assert [m for d, m in published if m["state"] == LIVE_ON]
+
+
+def test_a_socket_that_drops_after_the_last_card_closed_says_stopped():
+    class DropAfterRelease(FakeSocket):
+        async def receive_text(self, timeout):
+            if self.script:
+                return await super().receive_text(timeout)
+            t.release(DID, "tab-1")
+            raise ConnectionError("push socket closed")
+
+    clock = Clock()
+    t, published, cloud = tracker(clock)
+    t._connect = lambda url, headers: DropAfterRelease([HELLO], clock)
+    t.lease(DID, "tab-1")
+    run(t)
+    assert kinds(cloud) == ["push_socket", "subscribe", "unsubscribe"]
+    assert published[-1] == (DID, {"state": LIVE_STOPPED})
+
+
+def test_a_lost_session_at_subscribe_stops_every_device():
+    clock = Clock()
+    cloud = FakeCloud()
+    cloud.refuse[DID] = AqaraAuthError("app/view/subscribe", 108, "expired")
+    t, published, _ = tracker(clock, cloud=cloud, sockets=[[HELLO]])
+    t.lease(DID, "tab-1")
+    run(t)
+    assert published[-1] == (DID, {"state": LIVE_NO_SESSION})
+    assert t.watched() == set()
+
+
+def test_a_failed_heartbeat_is_logged_quietly_and_the_socket_stays():
+    class SilentCloud(FakeCloud):
+        def view_heartbeat(self):
+            super().view_heartbeat()
+            raise AqaraError("res/write", None, "timeout")
+
+    clock = Clock()
+    logs = []
+    cloud = SilentCloud()
+    t, published, _ = tracker(clock, cloud=cloud, sockets=[[HELLO, push(DID)]])
+    t._log = lambda text, **k: logs.append((text, k.get("level")))
+    t.lease(DID, "tab-1")
+    run(t)
+    assert (f"live view_heartbeat for {DID}: AqaraError", "DEBUG") in logs
+    assert [m for d, m in published if m["state"] == LIVE_ON]
+
+
+def test_the_retry_pause_ticks_until_its_delay_has_passed(monkeypatch):
+    monkeypatch.setattr(live_track, "TICK_SECONDS", 0.001)
+    monkeypatch.setattr(live_track, "RETRY_MIN_SECONDS", 0.003)
+    clock = Clock()
+    cloud = FakeCloud()
+    cloud.socket_error = AqaraError("app/push/socket", 500, "busy")
+    t, published, _ = tracker(clock, cloud=cloud)
+    t.lease(DID, "tab-1", 10_000)
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 3:
+            t.release(DID, "tab-1")
+        await real_sleep(0)
+
+    monkeypatch.setattr(live_track.asyncio, "sleep", sleep)
+    run(t)
+    assert sleeps == [0.001, 0.001, 0.001]
+    assert (DID, {"state": LIVE_RETRYING, "reason": "code 500",
+                  "code": 500}) in published
+
+
+def test_stopping_the_runner_cancels_a_socket_in_use():
+    class Hang(FakeSocket):
+        async def receive_text(self, timeout):
+            await asyncio.sleep(3600)
+
+    clock = Clock()
+    t, _, cloud = tracker(clock)
+    t._connect = lambda url, headers: Hang([], clock)
+    t.lease(DID, "tab-1")
+
+    async def scenario():
+        await t._start_runner()
+        while not cloud.calls:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
+        await t._stop_runner()
+        return t._runner
+
+    runner = asyncio.run(scenario())
+    assert runner.cancelled()
+
+
+def test_a_shutdown_that_cannot_stop_cleanly_still_ends_the_thread():
+    """The runner cannot be stopped and the loop cannot be closed yet: the
+    shutdown logs it, stops the thread and leaves no pool behind."""
+    logs = []
+    t = LiveTracker(lambda did: None, lambda d, m: None, threading.Lock(),
+                    log=lambda text, **k: logs.append(text), clock=Clock())
+    t._ensure_running()
+    loop, thread = t._loop, t._thread
+
+    async def cannot_stop():
+        raise RuntimeError("stuck")
+
+    def cannot_close():
+        raise RuntimeError("the loop is still running")
+
+    t._stop_runner = cannot_stop
+    loop.close = cannot_close
+    t.shutdown()
+    assert logs == ["live shutdown: RuntimeError"]
+    assert not thread.is_alive()
+    assert t._http is None and t._out is None
+    type(loop).close(loop)
