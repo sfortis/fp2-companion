@@ -11,7 +11,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import mqtt
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -73,9 +72,7 @@ class Fp2CompanionConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm, once MQTT is set up."""
-        if not self.hass.config_entries.async_entries(mqtt.DOMAIN):
-            return self.async_abort(reason="mqtt_required")
+        """Confirm."""
         if user_input is not None:
             return self.async_create_entry(title="Aqara FP2 Companion", data={})
         return self.async_show_form(step_id="user")

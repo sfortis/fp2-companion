@@ -1,4 +1,5 @@
-"""The integration inside Home Assistant: setup, MQTT, commands, unload.
+"""The integration inside Home Assistant: setup, entities, the move from
+MQTT, options, unload.
 
 The cloud is never reached: there is no session, so every call stops at
 "no session" before a request is sent.
@@ -6,17 +7,18 @@ The cloud is never reached: there is no session, so every call stops at
 from datetime import timedelta
 import json
 import os
+import time
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_fire_mqtt_message,
     async_fire_time_changed,
 )
 
@@ -24,17 +26,14 @@ import custom_components.fp2_companion as integration
 from custom_components.fp2_companion.const import DOMAIN
 
 SERIAL = "54EF44A1B2C3"
+KEY = "54ef44a1b2c3"
 OBJ = "fp2_companion_lumi1_54ef44a1b2c3"
 PREFIX = "presence_sensor_fp2_b2c3"
-
-
-def published(mqtt):
-    """{topic: payload} of everything published so far, the last one wins."""
-    return {c.args[0]: c.args[1] for c in mqtt.async_publish.call_args_list}
+HUB = "sensor.fp2_companion_devices"
 
 
 async def wait_for_worker(hass: HomeAssistant, entry) -> None:
-    """Let the worker finish what is queued, then the loop publish it."""
+    """Let the worker finish what is queued, then the loop write the states."""
     await hass.async_block_till_done()
     await hass.async_add_executor_job(
         lambda: entry.runtime_data._worker.submit(lambda: None).result(5))
@@ -49,16 +48,10 @@ async def start(hass: HomeAssistant, entry) -> None:
     await wait_for_worker(hass, entry)
 
 
-@pytest.fixture
-async def mqtt(hass: HomeAssistant, mqtt_mock):
-    """MQTT, unloaded after the test so that its client leaves no timer.
-    The mocked client's one-second loop ends the first time it runs."""
-    yield mqtt_mock
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
-    await hass.async_block_till_done()
-    for entry in hass.config_entries.async_entries("mqtt"):
-        await hass.config_entries.async_unload(entry.entry_id)
-    await hass.async_block_till_done()
+async def run(hass: HomeAssistant, entry, func, *args) -> None:
+    """One of the app's commands, on its worker, as an entity sends it."""
+    entry.runtime_data.submit(func, *args)
+    await wait_for_worker(hass, entry)
 
 
 @pytest.fixture
@@ -75,8 +68,8 @@ def fp2_device(hass: HomeAssistant):
 
 
 @pytest.fixture
-async def entry(hass: HomeAssistant, mqtt, fp2_device):
-    entry = MockConfigEntry(domain=DOMAIN, title="FP2 Companion")
+async def entry(hass: HomeAssistant, fp2_device):
+    entry = MockConfigEntry(domain=DOMAIN, title="Aqara FP2 Companion")
     entry.add_to_hass(hass)
     await start(hass, entry)
     yield entry
@@ -84,14 +77,7 @@ async def entry(hass: HomeAssistant, mqtt, fp2_device):
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_needs_mqtt(hass: HomeAssistant) -> None:
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"})
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "mqtt_required"
-
-
-async def test_setup_creates_one_entry(hass: HomeAssistant, mqtt) -> None:
+async def test_setup_creates_one_entry(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"})
     assert result["type"] is FlowResultType.FORM
@@ -107,30 +93,47 @@ async def test_setup_creates_one_entry(hass: HomeAssistant, mqtt) -> None:
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_the_fp2_is_found_and_published(hass, mqtt, entry) -> None:
+async def test_the_entities_sit_on_a_settings_device(
+        hass, entry, fp2_device) -> None:
     assert entry.state is ConfigEntryState.LOADED
-    topics = published(mqtt)
-    cfg = json.loads(topics[f"homeassistant/select/{OBJ}_sensitivity/config"])
-    assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
-    assert cfg["device"]["suggested_area"] == "Living Room"
-    assert cfg["command_topic"] == "fp2companion/54ef44a1b2c3/cmd/sensitivity"
-    hub = json.loads(topics["fp2companion/hub/attrs"])
-    assert [d["did"] for d in hub["devices"]] == ["lumi1.54ef44a1b2c3"]
-    assert hub["signed_in"] is False
+    registry = er.async_get(hass)
+    settings = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "lumi1.54ef44a1b2c3"), entry.entry_id)
+    assert settings.name == "Presence-Sensor-FP2-B2C3 Settings"
+    assert settings.via_device_id is None
+    assert settings.config_entry_id == entry.entry_id
+    assert settings.area_id == fp2_device.area_id
+    for entity_id in (f"select.{PREFIX}_sensitivity",
+                      f"select.{PREFIX}_approach_distance",
+                      f"switch.{PREFIX}_ai_detection",
+                      f"button.{PREFIX}_refresh",
+                      f"button.{PREFIX}_ai_learning",
+                      f"sensor.{PREFIX}_zones",
+                      f"sensor.{PREFIX}_backup_preview",
+                      f"sensor.{PREFIX}_cloud_status"):
+        reg = registry.async_get(entity_id)
+        assert reg is not None, entity_id
+        assert reg.platform == DOMAIN
+        assert reg.device_id == settings.id
+    # The HomeKit device stays HomeKit Device's alone.
+    assert dr.async_get(hass).async_get(fp2_device.id).config_entry_id \
+        != entry.entry_id
+    assert hass.states.get(f"select.{PREFIX}_sensitivity").name \
+        == "Presence-Sensor-FP2-B2C3 Settings Sensitivity"
+    hub = hass.states.get(HUB)
+    assert hub.state == "1"
+    assert [d["did"] for d in hub.attributes["devices"]] == ["lumi1.54ef44a1b2c3"]
+    assert hub.attributes["signed_in"] is False
     # No session: the status says so instead of calling the cloud.
-    assert topics["fp2companion/54ef44a1b2c3/status/state"] == "no_session"
+    assert hass.states.get(f"sensor.{PREFIX}_cloud_status").state == "no_session"
 
 
-async def test_a_card_command_reaches_the_app(hass, mqtt, entry) -> None:
-    mqtt.async_publish.reset_mock()
-    async_fire_mqtt_message(hass, "fp2companion/54ef44a1b2c3/cmd/preview",
-                            "no-such-backup")
-    await wait_for_worker(hass, entry)
-    topics = published(mqtt)
-    assert topics["fp2companion/54ef44a1b2c3/status/state"] == "refused"
+async def test_a_command_reaches_the_app(hass, entry) -> None:
+    device = entry.runtime_data.devices[KEY]
+    await run(hass, entry, device.show_preview, "no-such-backup")
+    assert hass.states.get(f"sensor.{PREFIX}_cloud_status").state == "refused"
 
 
-async def test_options_are_validated_and_reload(hass, mqtt, entry) -> None:
+async def test_options_are_validated_and_reload(hass, entry) -> None:
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"devices": ["not-a-serial"]})
@@ -144,14 +147,19 @@ async def test_options_are_validated_and_reload(hass, mqtt, entry) -> None:
     assert entry.state is ConfigEntryState.LOADED
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=12))
     await wait_for_worker(hass, entry)
-    hub = json.loads(published(mqtt)["fp2companion/hub/attrs"])
-    assert sorted(d["did"] for d in hub["devices"]) == [
+    hub = hass.states.get(HUB)
+    assert sorted(d["did"] for d in hub.attributes["devices"]) == [
         "lumi1.54ef44a1b2c3", "lumi1.54ef44d4e5f6"]
     assert entry.runtime_data.args["app_identities"] == [["id", "key"]]
+    # An FP2 added by serial has no HomeKit device, so it gets one of ours.
+    manual = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "lumi1.54ef44d4e5f6"), entry.entry_id)
+    assert manual is not None and manual.name == "FP2 E5F6 Settings"
+    assert manual.via_device_id is None
+    assert hass.states.get("select.fp2_e5f6_sensitivity") is not None
 
 
 async def test_the_appdaemon_state_is_copied_once(
-        hass, mqtt, fp2_device, tmp_path, monkeypatch) -> None:
+        hass, fp2_device, tmp_path, monkeypatch) -> None:
     old = tmp_path / "appdaemon_state"
     (old / "backups" / "lumi1.54ef44a1b2c3").mkdir(parents=True)
     (old / "session.json").write_text(json.dumps({"phone_id": "kept"}))
@@ -174,7 +182,7 @@ async def test_the_appdaemon_state_is_copied_once(
 
 @pytest.mark.parametrize("folder", ["fp2-companion", "fp2_companion"])
 async def test_it_waits_while_the_appdaemon_app_is_installed(
-        hass, mqtt, fp2_device, tmp_path, monkeypatch, folder) -> None:
+        hass, fp2_device, tmp_path, monkeypatch, folder) -> None:
     """HACS names the folder fp2-companion; a copy by hand, fp2_companion."""
     old = tmp_path / "appdaemon_state"
     old.mkdir()
@@ -191,7 +199,7 @@ async def test_it_waits_while_the_appdaemon_app_is_installed(
     # Nothing was copied and nothing was published while it waits.
     state = hass.config.path(".storage", "fp2_companion", "session.json")
     assert not await hass.async_add_executor_job(os.path.exists, state)
-    assert "fp2companion/hub/attrs" not in published(mqtt)
+    assert hass.states.get(HUB) is None
 
     # Once the folder is gone, the next retry starts it and clears the repair.
     await hass.async_add_executor_job(os.rmdir, old_app)
@@ -205,14 +213,14 @@ async def test_it_waits_while_the_appdaemon_app_is_installed(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_unload_stops_the_worker(hass, mqtt, entry) -> None:
+async def test_unload_stops_the_worker(hass, entry) -> None:
     worker = entry.runtime_data._worker
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert worker._shutdown
 
 
 async def test_a_session_made_before_the_integration_is_not_overwritten(
-        hass, mqtt, fp2_device, tmp_path, monkeypatch) -> None:
+        hass, fp2_device, tmp_path, monkeypatch) -> None:
     """`login.py` may have written session.json already; the copy then still
     brings the backups, and the newer session stays."""
     old = tmp_path / "appdaemon_state"
@@ -239,18 +247,10 @@ async def test_a_session_made_before_the_integration_is_not_overwritten(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_a_retained_command_is_ignored(hass, mqtt, entry) -> None:
-    app = entry.runtime_data
-    seen = []
-    app._submit = lambda func, *args: seen.append(args)
-    async_fire_mqtt_message(
-        hass, "fp2companion/54ef44a1b2c3/cmd/refresh", "", retain=True)
-    await hass.async_block_till_done()
-    assert seen == []
 
 
 async def test_removing_the_entry_removes_the_repair(
-        hass, mqtt, fp2_device) -> None:
+        hass, fp2_device) -> None:
     old_app = hass.config.path("appdaemon", "apps", "fp2-companion")
     await hass.async_add_executor_job(
         lambda: os.makedirs(old_app, exist_ok=True))
@@ -263,8 +263,8 @@ async def test_removing_the_entry_removes_the_repair(
         DOMAIN, "appdaemon_app_installed")
 
 
-async def test_a_failed_start_leaves_nothing_subscribed(
-        hass, mqtt, fp2_device, monkeypatch) -> None:
+async def test_a_failed_start_stops_the_app(
+        hass, fp2_device, monkeypatch) -> None:
     from custom_components.fp2_companion.runtime import HassFp2Companion
 
     stopped = []
@@ -285,7 +285,7 @@ async def test_a_failed_start_leaves_nothing_subscribed(
     assert stopped == [True]
 
 
-async def test_home_assistant_stopping_stops_the_app(hass, mqtt, entry) -> None:
+async def test_home_assistant_stopping_stops_the_app(hass, entry) -> None:
     from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 
     worker = entry.runtime_data._worker
@@ -295,7 +295,7 @@ async def test_home_assistant_stopping_stops_the_app(hass, mqtt, entry) -> None:
 
 
 async def test_stored_identities_are_not_sent_and_kept_when_empty(
-        hass, mqtt, fp2_device) -> None:
+        hass, fp2_device) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, options={"app_identities": ["id:key"]})
     entry.add_to_hass(hass)
@@ -327,7 +327,7 @@ async def test_stored_identities_are_not_sent_and_kept_when_empty(
 
 
 async def test_clearing_and_replacing_identities_at_once_is_refused(
-        hass, mqtt, fp2_device) -> None:
+        hass, fp2_device) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, options={"app_identities": ["id:key"]})
     entry.add_to_hass(hass)
@@ -343,7 +343,7 @@ async def test_clearing_and_replacing_identities_at_once_is_refused(
 
 
 async def test_a_rejected_submit_keeps_the_typed_identities(
-        hass, mqtt, fp2_device) -> None:
+        hass, fp2_device) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN, options={"app_identities": ["id:key"]})
     entry.add_to_hass(hass)
@@ -362,3 +362,120 @@ def test_terminate_before_initialize_does_not_fail() -> None:
     from custom_components.fp2_companion.companion import Fp2Companion
 
     Fp2Companion.terminate(object.__new__(Fp2Companion))
+
+
+# ------------------------------------------------------- zone selects
+def zones(*pairs):
+    return [{"rangeId": rid, "name": name, "regionType": 0, "sensitivity": 2,
+             "blockList": [1]} for rid, name in pairs]
+
+
+async def show_zones(hass, entry, zone_list) -> None:
+    """The zones a read would have found, without the cloud."""
+    app = entry.runtime_data
+    device = app.devices[KEY]
+
+    def read():
+        device.zones = zone_list
+        device.last_read = time.time()
+        device._changed()
+
+    await run(hass, entry, read)
+
+
+async def test_a_zone_gets_a_select_and_loses_it_when_gone(hass, entry) -> None:
+    await show_zones(hass, entry, zones((3, "Couch"), (1, "Kitchen Countertop")))
+    couch = hass.states.get(f"select.{PREFIX}_couch_sensitivity")
+    assert couch.state == "Medium"
+    assert couch.name == "Presence-Sensor-FP2-B2C3 Settings Couch sensitivity"
+    assert hass.states.get(f"select.{PREFIX}_kitchen_countertop_sensitivity")
+    await show_zones(hass, entry, zones((3, "Couch")))
+    registry = er.async_get(hass)
+    assert registry.async_get(f"select.{PREFIX}_kitchen_countertop_sensitivity") \
+        is None
+    assert registry.async_get(f"select.{PREFIX}_couch_sensitivity")
+
+
+async def test_a_zone_deleted_while_home_assistant_was_down_is_removed(
+        hass, fp2_device) -> None:
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "select", DOMAIN, f"{OBJ}_zone_9_sensitivity",
+        suggested_object_id=f"{PREFIX}_gone_sensitivity", config_entry=entry)
+    await start(hass, entry)
+    await show_zones(hass, entry, zones((3, "Couch")))
+    assert registry.async_get(f"select.{PREFIX}_gone_sensitivity") is None
+    assert registry.async_get(f"select.{PREFIX}_couch_sensitivity")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+# ------------------------------------------------------- the move from MQTT
+async def test_the_mqtt_entities_move_with_their_ids_and_settings(
+        hass, fp2_device) -> None:
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    devices = dr.async_get(hass)
+    old_device = devices.async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        identifiers={("mqtt", f"fp2_companion_lumi1.{KEY}")},
+        name="Presence-Sensor-FP2-B2C3 Settings")
+    hub_device = devices.async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        identifiers={("mqtt", "fp2_companion")}, name="FP2 Companion")
+    registry = er.async_get(hass)
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    old = registry.async_get_or_create(
+        "select", "mqtt", f"{OBJ}_sensitivity",
+        suggested_object_id=f"{PREFIX}_sensitivity",
+        config_entry=mqtt_entry, device_id=old_device.id)
+    registry.async_update_entity(
+        old.entity_id, name="Living sensitivity", area_id=kitchen.id,
+        icon="mdi:tune")
+    # A person renamed this one; the new id is kept, not the suggested one.
+    renamed = registry.async_get_or_create(
+        "sensor", "mqtt", f"{OBJ}_zones",
+        suggested_object_id=f"{PREFIX}_zones", config_entry=mqtt_entry,
+        device_id=old_device.id)
+    registry.async_update_entity(renamed.entity_id,
+                                 new_entity_id="sensor.living_fp2_zones")
+    registry.async_get_or_create(
+        "sensor", "mqtt", "fp2_companion_devices",
+        suggested_object_id="fp2_companion_devices", config_entry=mqtt_entry,
+        device_id=hub_device.id)
+    hidden = registry.async_get_or_create(
+        "button", "mqtt", f"{OBJ}_ai_learning",
+        suggested_object_id=f"{PREFIX}_ai_learning", config_entry=mqtt_entry,
+        hidden_by=er.RegistryEntryHider.USER)
+
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    await start(hass, entry)
+
+    moved = registry.async_get(f"select.{PREFIX}_sensitivity")
+    assert moved.platform == DOMAIN
+    assert moved.config_entry_id == entry.entry_id
+    assert moved.name == "Living sensitivity"
+    assert moved.area_id == kitchen.id
+    assert moved.icon == "mdi:tune"
+    assert dr.async_get(hass).async_get(moved.device_id).name \
+        == "Presence-Sensor-FP2-B2C3 Settings"
+    assert registry.async_get("sensor.living_fp2_zones").platform == DOMAIN
+    assert registry.async_get(f"sensor.{PREFIX}_zones") is None
+    assert registry.async_get(HUB).platform == DOMAIN
+    assert registry.async_get(hidden.entity_id).hidden_by \
+        is er.RegistryEntryHider.USER
+    assert hass.states.get(f"select.{PREFIX}_sensitivity") is not None
+    assert not [e for e in registry.entities.values()
+                if e.platform == "mqtt"]
+    assert devices.async_get(old_device.id) is None
+    assert devices.async_get(hub_device.id) is None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    # A second setup finds nothing left to move.
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get(f"select.{PREFIX}_sensitivity").name \
+        == "Living sensitivity"
+    assert await hass.config_entries.async_unload(entry.entry_id)

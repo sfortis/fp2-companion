@@ -1,10 +1,14 @@
 {
   "domain": "fp2_companion",
   "name": "Aqara FP2 Companion",
-  "after_dependencies": ["homekit_controller"],
-  "codeowners": ["@sfortis"],
+  "after_dependencies": [
+    "homekit_controller",
+    "mqtt"
+  ],
+  "codeowners": [
+    "@sfortis"
+  ],
   "config_flow": true,
-  "dependencies": ["mqtt"],
   "documentation": "https://github.com/sfortis/fp2-companion",
   "integration_type": "service",
   "iot_class": "cloud_polling",

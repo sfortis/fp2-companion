@@ -6,7 +6,6 @@
       }
     },
     "abort": {
-      "mqtt_required": "Configura prima l'integrazione MQTT. Aqara FP2 Companion pubblica le sue entità e riceve i comandi della card tramite MQTT.",
       "single_instance_allowed": "Aqara FP2 Companion è già configurato. Una sola voce serve tutti gli FP2."
     }
   },
@@ -43,6 +42,57 @@
     "appdaemon_app_installed": {
       "title": "L'app AppDaemon di Aqara FP2 Companion è ancora installata",
       "description": "Aqara FP2 Companion ora funziona come integrazione, ma l'app AppDaemon è ancora in `{path}`. Se AppDaemon la esegue, app e integrazione eseguirebbero entrambe ogni comando della card e rinnoverebbero la stessa sessione Aqara, disconnettendosi a vicenda. Per questo l'integrazione aspetta.\n\nPrima ferma AppDaemon, oppure togli la voce `fp2_companion` da `apps.yaml` e riavvialo, così l'app non è più in esecuzione. Poi cancella quella cartella. La vecchia sessione in `/share/appdaemon/fp2_companion/` la cancella l'integrazione dopo averla copiata. L'integrazione parte da sola, mantiene la sessione Aqara e i backup delle zone, e questa riparazione sparisce."
+    }
+  },
+  "entity": {
+    "select": {
+      "sensitivity": {
+        "name": "Sensibilità"
+      },
+      "approach_distance": {
+        "name": "Distanza di avvicinamento"
+      },
+      "zone_sensitivity": {
+        "name": "Sensibilità {zone}"
+      }
+    },
+    "switch": {
+      "ai_detection": {
+        "name": "Rilevamento persone AI"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Aggiorna"
+      },
+      "ai_learning": {
+        "name": "Apprendimento AI"
+      }
+    },
+    "sensor": {
+      "zones": {
+        "name": "Zone"
+      },
+      "backup_preview": {
+        "name": "Anteprima backup"
+      },
+      "cloud_status": {
+        "name": "Stato cloud",
+        "state": {
+          "starting": "Avvio",
+          "ok": "OK",
+          "not_on_account": "Non nell'account",
+          "no_session": "Accesso non effettuato",
+          "cloud_error": "Errore del cloud",
+          "write_not_applied": "Scrittura non applicata",
+          "zone_write_failed": "Scrittura delle zone non riuscita",
+          "login_failed": "Accesso non riuscito",
+          "refused": "Rifiutato"
+        }
+      },
+      "devices": {
+        "name": "Dispositivi"
+      }
     }
   }
 }

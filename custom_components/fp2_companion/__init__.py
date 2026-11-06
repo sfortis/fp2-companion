@@ -1,9 +1,9 @@
 """FP2 Companion: every Aqara FP2's settings and zones in Home Assistant.
 
 The integration starts the app (`companion.py`) on a runtime of Home
-Assistant's (`runtime.py`). Its entities are MQTT discovery entities, as they
-were under AppDaemon, so entity ids, the card and its commands are unchanged
-(decision 26).
+Assistant's (`runtime.py`, decision 26). Its entities are native and keep the
+entity ids of the MQTT discovery entities of versions up to 1.4.x, which the
+first setup moves over (`migrate.py`, decision 27).
 """
 
 from __future__ import annotations
@@ -13,9 +13,8 @@ import os
 import shutil
 from typing import Any
 
-from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
@@ -23,7 +22,6 @@ from homeassistant.helpers import issue_registry as ir
 from .const import (
     APPDAEMON_APP_DIRS,
     APPDAEMON_STATE_DIR,
-    BASE_TOPIC,
     CONF_APP_IDENTITIES,
     CONF_BACKUPS_KEEP,
     CONF_DEVICES,
@@ -36,9 +34,12 @@ from .const import (
     ISSUE_APPDAEMON_APP,
     STATE_DIR,
 )
+from .migrate import async_migrate_mqtt_entities
 from .runtime import HassFp2Companion
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = [Platform.BUTTON, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
 
 type Fp2CompanionConfigEntry = ConfigEntry[HassFp2Companion]
 
@@ -47,8 +48,6 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> bool:
     """Start the app."""
-    if not await mqtt.async_wait_for_mqtt_client(hass):
-        raise ConfigEntryNotReady("MQTT is not available")
     # While the AppDaemon app is installed it may be running: both would act
     # on every card command and refresh one session, signing each other out.
     # So the integration waits, and Home Assistant retries the setup until
@@ -70,16 +69,17 @@ async def async_setup_entry(
     ir.async_delete_issue(hass, DOMAIN, ISSUE_APPDAEMON_APP)
     state_dir = hass.config.path(STATE_DIR)
     await hass.async_add_executor_job(_prepare_state, state_dir)
+    await async_migrate_mqtt_entities(hass, entry)
 
-    app = HassFp2Companion(hass, _app_args(hass, entry, state_dir))
+    app = HassFp2Companion(hass, entry.entry_id, _app_args(hass, entry, state_dir))
     try:
         await app.async_start()
     except BaseException:
-        # Whatever the app subscribed to before it failed must not stay
-        # behind, or a reload would run every command twice.
+        # The app's timers must not stay behind a failed start.
         await app.async_stop()
         raise
     entry.runtime_data = app
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def _async_stop_app(_event: Event) -> None:
         # Home Assistant does not unload entries when it shuts down.
@@ -95,7 +95,9 @@ async def async_setup_entry(
 async def async_unload_entry(
     hass: HomeAssistant, entry: Fp2CompanionConfigEntry
 ) -> bool:
-    """Stop the app."""
+    """Remove the entities, then stop the app."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     await entry.runtime_data.async_stop()
     return True
 
@@ -179,8 +181,6 @@ def _app_args(
     options = entry.options
     return {
         "state_dir": state_dir,
-        "base_topic": BASE_TOPIC,
-        "discovery_prefix": _discovery_prefix(hass),
         "devices": list(options.get(CONF_DEVICES, [])),
         "exclude": list(options.get(CONF_EXCLUDE, [])),
         "backups_keep": int(options.get(CONF_BACKUPS_KEEP, DEFAULT_BACKUPS_KEEP)),
@@ -200,12 +200,3 @@ def parse_identities(values: list[str]) -> list[list[str]]:
         if sep and app_id.strip() and app_key.strip():
             pairs.append([app_id.strip(), app_key.strip()])
     return pairs
-
-
-def _discovery_prefix(hass: HomeAssistant) -> str:
-    """The MQTT integration's discovery prefix, so the entities appear even
-    where it is not the default."""
-    for entry in hass.config_entries.async_entries(mqtt.DOMAIN):
-        conf = {**entry.data, **entry.options}
-        return str(conf.get(mqtt.CONF_DISCOVERY_PREFIX, "homeassistant"))
-    return "homeassistant"

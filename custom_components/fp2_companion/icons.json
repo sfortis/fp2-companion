@@ -1,0 +1,51 @@
+{
+  "entity": {
+    "select": {
+      "sensitivity": {
+        "default": "mdi:motion-sensor"
+      },
+      "approach_distance": {
+        "default": "mdi:arrow-collapse-horizontal"
+      },
+      "zone_sensitivity": {
+        "default": "mdi:vector-square"
+      }
+    },
+    "switch": {
+      "ai_detection": {
+        "default": "mdi:account-search"
+      }
+    },
+    "button": {
+      "refresh": {
+        "default": "mdi:cloud-refresh"
+      },
+      "ai_learning": {
+        "default": "mdi:school"
+      }
+    },
+    "sensor": {
+      "zones": {
+        "default": "mdi:floor-plan"
+      },
+      "backup_preview": {
+        "default": "mdi:file-restore"
+      },
+      "cloud_status": {
+        "default": "mdi:cloud-check",
+        "state": {
+          "no_session": "mdi:cloud-lock",
+          "cloud_error": "mdi:cloud-alert",
+          "login_failed": "mdi:cloud-lock",
+          "not_on_account": "mdi:cloud-question",
+          "refused": "mdi:cloud-cancel",
+          "write_not_applied": "mdi:cloud-alert",
+          "zone_write_failed": "mdi:cloud-alert"
+        }
+      },
+      "devices": {
+        "default": "mdi:radar"
+      }
+    }
+  }
+}

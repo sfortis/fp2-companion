@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from conftest import World, _bind, _load, mqtt_payload
+from conftest import World, _bind, _load
 
 from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
                                                          AqaraError,
@@ -18,8 +18,6 @@ from custom_components.fp2_companion.aqara_cloud import (AqaraAuthError,
 DID = "lumi1.54ef44a1b2c3"
 KEY = "54ef44a1b2c3"
 PREFIX = "presence_sensor_fp2_b2c3"
-OBJ = "fp2_companion_lumi1_54ef44a1b2c3"
-T = f"fp2companion/{KEY}"
 
 # What the discovery template returned live on 2026-10-30. The Office FP2
 # was renamed in Home Assistant; its HomeKit entity ids kept the original name.
@@ -178,6 +176,7 @@ def fp2(tmp_path):
         world = world or World()
         app = mod.Fp2Companion()
         _bind(app, world)
+        world.app = app
         found = [LIVING] if devices is None else devices
         app.lookups = 0
 
@@ -217,32 +216,68 @@ def fp2(tmp_path):
     return make
 
 
+def dev(world, key=KEY):
+    return world.app.devices[key]
+
+
 def cmd(app, key, payload="", device=KEY):
-    """A device command, or an app command (login, logout, rescan)."""
-    topic = (f"fp2companion/cmd/{key}" if key in ("login", "logout", "rescan")
-             else f"fp2companion/{device}/cmd/{key}")
-    app._on_cmd(topic, payload)
+    """One command, as the card or an entity sends it: an app command
+    (login, logout, rescan) or one for a device."""
+    if key == "login":
+        app.login(_json(payload))
+        return
+    if key == "logout":
+        app.logout()
+        return
+    if key == "rescan":
+        app.rescan()
+        return
+    d = app.devices[device]
+    if key.startswith("zone/") and key.endswith("/sensitivity"):
+        d.set_zone_sensitivity(key[len("zone/"):-len("/sensitivity")], payload)
+        return
+    calls = {
+        "refresh": lambda: d.refresh(),
+        "sensitivity": lambda: d.set_sensitivity(payload),
+        "approach_distance": lambda: d.set_approach_distance(payload),
+        "ai_detection": lambda: d.set_ai_detection(payload.lower() in ("on", "1")),
+        "ai_learning": lambda: d.start_ai_learning(),
+        "zone_set": lambda: d.zone_set(_json(payload)),
+        "zone_delete": lambda: d.zone_delete(payload),
+        "restore": lambda: d.restore(payload),
+        "preview": lambda: d.show_preview(payload),
+    }
+    calls[key]()
 
 
-def discovery(world, component, key):
-    raw = mqtt_payload(world, f"homeassistant/{component}/{OBJ}_{key}/config")
-    return json.loads(raw) if raw else raw
+def _json(payload):
+    """What the card's command carries, parsed; a payload that is not JSON
+    goes through as is, so the app's own check sees it."""
+    try:
+        return json.loads(payload)
+    except (TypeError, ValueError):
+        return payload
 
 
-def status(world):
-    return mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/state")
+def status(world, key=KEY):
+    device = world.app.devices.get(key)
+    return device.status if device else None
 
 
 def zone_attrs(world):
-    return json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/zones/attrs"))
+    return dev(world).zones_attributes()
+
+
+def preview_name(world):
+    return (dev(world).preview or {}).get("name")
 
 
 # ----------------------------------------------------------------- startup
-def test_the_app_subscribes_to_its_and_every_devices_commands(fp2):
+def test_a_device_found_is_announced_once(fp2):
     app, world = fp2()
-    assert world.subscriptions == [
-        {"topics": ["fp2companion/cmd/#", "fp2companion/+/cmd/#"],
-         "callback": app._on_cmd}]
+    app.start()
+    app.start()
+    assert world.added == [KEY]
 
 
 def test_the_device_is_found_in_home_assistant(fp2):
@@ -250,53 +285,44 @@ def test_the_device_is_found_in_home_assistant(fp2):
     app.start()
     assert DID in app.dids
     assert app.lookups == 1
-    cfg = discovery(world, "select", "sensitivity")
-    assert cfg["default_entity_id"] == f"select.{PREFIX}_sensitivity"
-    assert cfg["device"]["suggested_area"] == "Living Room"
-    assert cfg["device"]["name"] == "Presence-Sensor-FP2-B2C3 Settings"
-    assert cfg["command_topic"] == f"{T}/cmd/sensitivity"
+    info = dev(world).info
+    assert info["prefix"] == PREFIX
+    assert info["area"] == "Living Room"
+    assert info["name"] == "Presence-Sensor-FP2-B2C3"
 
 
-def test_every_entity_carries_the_homekit_prefix(fp2):
-    app, world = fp2()
+def test_the_prefix_comes_from_the_homekit_name(fp2):
+    app, world = fp2(devices=[LIVING, OFFICE])
     app.start()
-    ids = {discovery(world, c, k)["default_entity_id"] for c, k in (
-        ("select", "approach_distance"), ("button", "refresh"),
-        ("sensor", "zones"), ("sensor", "cloud_status"))}
-    assert ids == {f"select.{PREFIX}_approach_distance",
-                   f"button.{PREFIX}_refresh", f"sensor.{PREFIX}_zones",
-                   f"sensor.{PREFIX}_cloud_status"}
+    # The office was renamed in Home Assistant; its HomeKit entity ids, and
+    # so this app's, keep the original name.
+    assert dev(world, "54ef44d4e5f6").info["prefix"] == "presence_sensor_fp2_e5f6"
+    assert dev(world, "54ef44d4e5f6").info["name"] == "Motion Sensor - Office"
 
 
-def test_no_fp2_found_publishes_no_device_and_retries(fp2):
+def test_no_fp2_found_adds_no_device_and_retries(fp2):
     app, world = fp2(devices=[{"serial": None, "name": None, "area": None}])
     app.start()
     assert app.devices == {}
-    topics = [c[2]["topic"] for c in world.calls if c[0] == "mqtt/publish"]
-    assert not [t for t in topics if OBJ in t]
+    assert world.added == []
     assert world.timers[-1]["callback"] == app.start
 
 
 def test_startup_reads_and_publishes_the_values(fp2):
     app, world = fp2()
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "Low"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/approach_distance") == "Far"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/zone/3/sensitivity") == "Medium"
+    assert dev(world).sensitivity == "Low"
+    assert dev(world).approach_distance == "Far"
+    assert dev(world).zone_sensitivity(3) == "Medium"
     assert status(world) == "ok"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/zones/state") == "3"
+    assert len(dev(world).zones) == 3
 
 
 def test_only_detection_zones_get_a_select(fp2):
     app, world = fp2()
     app.start()
-    couch = discovery(world, "select", "zone_3_sensitivity")
-    assert couch["default_entity_id"] == f"select.{PREFIX}_couch_sensitivity"
-    assert couch["name"] == "Couch Sensitivity"
-    kitchen = discovery(world, "select", "zone_1_sensitivity")
-    assert kitchen["default_entity_id"] == \
-        f"select.{PREFIX}_kitchen_countertop_sensitivity"
-    assert discovery(world, "select", "zone_101_sensitivity") is None
+    zones = {z["rangeId"]: z["name"] for z in dev(world).detection_zones()}
+    assert zones == {3: "Couch", 1: "Kitchen Countertop"}
 
 
 def test_startup_checks_the_token(fp2):
@@ -326,7 +352,7 @@ def test_a_setting_is_written_and_read_back(fp2):
     timer = world.timers[-1]
     assert timer["callback"] == app.devices[KEY]._verify_write
     app.devices[KEY]._verify_write({"rid": "14.1.85", "value": "2"})
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "Medium"
+    assert dev(world).sensitivity == "Medium"
     assert status(world) == "ok"
 
 
@@ -339,9 +365,9 @@ def test_a_write_the_device_ignored_is_reported_not_retried(fp2):
     cmd(app, "approach_distance", "Close")
     app.devices[KEY]._verify_write({"rid": "14.47.85", "value": "2"})
     assert status(world) == "write_not_applied"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail == {"rid": "14.47.85", "wrote": "2", "reads": "0"}
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/approach_distance") == "Far"
+    assert dev(world).approach_distance == "Far"
     assert len(app.cloud_fake.writes) == 1
 
 
@@ -353,11 +379,6 @@ def test_an_unknown_option_is_refused_and_nothing_is_written(fp2):
     assert status(world) == "refused"
 
 
-def test_a_topic_outside_the_prefix_is_ignored(fp2):
-    app, world = fp2()
-    app.start()
-    app._on_cmd("lgoled/cmd/sensitivity", "High")
-    assert app.cloud_fake.writes == []
 
 
 def test_refresh_reads_again(fp2):
@@ -365,7 +386,7 @@ def test_refresh_reads_again(fp2):
     app.start()
     app.cloud_fake.values["14.1.85"] = "3"
     cmd(app, "refresh", "PRESS")
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/sensitivity") == "High"
+    assert dev(world).sensitivity == "High"
 
 
 # ------------------------------------------------------------------- errors
@@ -383,9 +404,9 @@ def test_a_failed_call_keeps_its_code_and_endpoint(fp2):
     app, world = fp2(cloud=cloud)
     app.start()
     assert status(world) == "cloud_error"
-    attrs = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))
-    assert attrs["last_error"]["code"] == 302
-    assert attrs["last_error"]["endpoint"] == "devex/radar/range/list"
+    shown = attrs(world)
+    assert shown["last_error"]["code"] == 302
+    assert shown["last_error"]["endpoint"] == "devex/radar/range/list"
 
 
 # ------------------------------------------------------------------ backups
@@ -415,25 +436,15 @@ def test_block_order_alone_is_not_a_change(fp2, tmp_path):
 
 
 # --------------------------------------------------------------- zone list
-def test_a_zone_that_went_away_loses_its_select(fp2):
+def test_a_zone_that_went_away_leaves_the_detection_zones(fp2):
     app, world = fp2()
     app.start()
     app.cloud_fake.zones = [z for z in app.cloud_fake.zones
                             if z["rangeId"] != 1]
     cmd(app, "refresh")
-    assert mqtt_payload(
-        world, f"homeassistant/select/{OBJ}_zone_1_sensitivity/config") == ""
+    assert [z["rangeId"] for z in dev(world).detection_zones()] == [3]
 
 
-def test_a_zone_deleted_while_the_app_was_down_is_retired(fp2):
-    app, world = fp2()
-    app.start()
-    cloud = FakeCloud()
-    cloud.zones = [z for z in cloud.zones if z["rangeId"] != 3]
-    app2, world2 = fp2(cloud=cloud)
-    app2.start()
-    assert mqtt_payload(
-        world2, f"homeassistant/select/{OBJ}_zone_3_sensitivity/config") == ""
 
 
 # -------------------------------------------------------------------- zones
@@ -458,7 +469,7 @@ def test_a_zone_select_rewrites_only_that_zones_sensitivity(fp2, tmp_path):
     assert "before-write" in backups(tmp_path)
     fire(world)
     assert status(world) == "ok"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/zone/3/sensitivity") == "High"
+    assert dev(world).zone_sensitivity(3) == "High"
 
 
 def test_an_edit_keeps_every_field_the_card_does_not_send(fp2):
@@ -551,8 +562,7 @@ def with_edge(fp2):
 
 
 def refusal_code(world):
-    attrs = mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs")
-    return json.loads(attrs)["detail"]["code"]
+    return attrs(world)["detail"]["code"]
 
 
 def test_the_room_edge_is_redrawn_with_the_six_fields_the_aqara_app_sends(fp2):
@@ -817,8 +827,8 @@ def test_a_create_sends_no_id_and_finds_the_new_zone(fp2):
     assert "rangeId" not in sent and sent["tagId"] == ""
     fire(world)
     assert status(world) == "ok"
-    desk = discovery(world, "select", "zone_4_sensitivity")
-    assert desk["default_entity_id"] == f"select.{PREFIX}_desk_sensitivity"
+    assert {z["rangeId"]: z["name"] for z in dev(world).detection_zones()}[4] \
+        == "Desk"
 
 
 def test_an_interference_zone_is_never_created(fp2):
@@ -828,7 +838,7 @@ def test_an_interference_zone_is_never_created(fp2):
                                      "regionType": 1}))
     assert app.cloud_fake.zone_writes == []
     assert status(world) == "refused"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "interference_locked"
 
 
@@ -838,7 +848,7 @@ def test_an_edit_of_a_zone_that_is_gone_is_refused(fp2):
     cmd(app, "zone_set", json.dumps({"rangeId": 9, "name": "Ghost",
                                      "blockList": [1]}))
     assert app.cloud_fake.zone_writes == []
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "range_id"
 
 
@@ -848,11 +858,11 @@ def test_a_bad_zone_is_refused_before_any_backup_or_write(fp2, tmp_path):
     cmd(app, "zone_set", json.dumps({"rangeId": 3, "blockList": [0, 321]}))
     assert app.cloud_fake.zone_writes == []
     assert backups(tmp_path) == ["first-read"]
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "bad_block"
 
 
-def test_a_delete_goes_by_id_and_retires_the_select(fp2, tmp_path):
+def test_a_delete_goes_by_id(fp2, tmp_path):
     app, world = fp2()
     app.start()
     cmd(app, "zone_delete", "1")
@@ -860,8 +870,7 @@ def test_a_delete_goes_by_id_and_retires_the_select(fp2, tmp_path):
     assert "before-write" in backups(tmp_path)
     fire(world)
     assert status(world) == "ok"
-    assert mqtt_payload(
-        world, f"homeassistant/select/{OBJ}_zone_1_sensitivity/config") == ""
+    assert [z["rangeId"] for z in dev(world).detection_zones()] == [3]
 
 
 def test_the_interference_zone_is_never_deleted(fp2):
@@ -879,7 +888,7 @@ def test_a_zone_write_that_did_not_land_is_reported(fp2):
     cmd(app, "zone_set", json.dumps({"name": "Desk", "blockList": [15]}))
     fire(world)
     assert status(world) == "zone_write_failed"
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["kind"] == "create"
 
 
@@ -909,7 +918,7 @@ def test_a_restore_that_needs_a_new_interference_zone_is_refused(fp2):
                             if z["rangeId"] != 101]
     cmd(app, "restore", first)
     assert app.cloud_fake.zone_writes == [] and app.cloud_fake.deletes == []
-    detail = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))["detail"]
+    detail = attrs(world)["detail"]
     assert detail["code"] == "interference_locked"
 
 
@@ -933,11 +942,9 @@ def test_a_backup_can_be_previewed_before_a_restore(fp2):
     app.start()
     name = zone_attrs(world)["backups"][0]["name"]
     cmd(app, "preview", name)
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/state") == name
-    attrs = json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/attrs"))
+    assert preview_name(world) == name
+    attrs = dev(world).preview
     assert [z["rangeId"] for z in attrs["zones"]] == [3, 1, 101]
-    assert discovery(world, "sensor", "backup_preview")["default_entity_id"] \
-        == f"sensor.{PREFIX}_backup_preview"
 
 
 def test_a_preview_of_no_backup_is_refused(fp2):
@@ -945,7 +952,7 @@ def test_a_preview_of_no_backup_is_refused(fp2):
     app.start()
     cmd(app, "preview", "../session.json")
     assert status(world) == "refused"
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/preview/state") is None
+    assert preview_name(world) is None
 
 
 # -------------------------------------------------------------- signing in
@@ -953,7 +960,7 @@ BLOB = "QkxPQg==" * 20
 
 
 def attrs(world):
-    return json.loads(mqtt_payload(world, "fp2companion/54ef44a1b2c3/status/attrs"))
+    return dev(world).status_attributes()
 
 
 def test_the_account_is_shown_partly_hidden(fp2):
@@ -1027,9 +1034,7 @@ def test_mask_account(fp2, account, shown):
 def test_the_ai_switch_reflects_the_device(fp2):
     app, world = fp2()
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/ai_detection") == "off"
-    cfg = discovery(world, "switch", "ai_detection")
-    assert cfg["default_entity_id"] == f"switch.{PREFIX}_ai_detection"
+    assert dev(world).ai_detection is False
 
 
 def test_the_ai_switch_writes_and_reads_back(fp2):
@@ -1039,7 +1044,7 @@ def test_the_ai_switch_writes_and_reads_back(fp2):
     assert app.cloud_fake.writes == [("4.72.85", "1")]
     app.cloud_fake.values["14.1.85"] = "3"          # the device masks it
     world.timers[-1]["callback"](world.timers[-1]["kwargs"])
-    assert mqtt_payload(world, "fp2companion/54ef44a1b2c3/state/ai_detection") == "on"
+    assert dev(world).ai_detection is True
     assert status(world) == "ok"
 
 
@@ -1078,19 +1083,10 @@ def two(fp2):
     return app, world, clouds[OFFICE_DID]
 
 
-def test_every_fp2_found_gets_its_own_entities(fp2):
+def test_every_fp2_found_is_served(fp2):
     app, world, _ = two(fp2)
-    raw = mqtt_payload(world, "homeassistant/select/"
-                              "fp2_companion_lumi1_54ef44d4e5f6_sensitivity/config")
-    cfg = json.loads(raw)
-    # The id follows the HomeKit entities, built from the original name; the
-    # device shows the name the owner gave it.
-    assert cfg["default_entity_id"] == "select.presence_sensor_fp2_e5f6_sensitivity"
-    assert cfg["device"]["name"] == "Motion Sensor - Office Settings"
-    assert cfg["device"]["suggested_area"] == "Office"
-    assert cfg["command_topic"] == "fp2companion/54ef44d4e5f6/cmd/sensitivity"
-    assert discovery(world, "select", "sensitivity")["default_entity_id"] == \
-        f"select.{PREFIX}_sensitivity"
+    assert world.added == [KEY, "54ef44d4e5f6"]
+    assert dev(world, "54ef44d4e5f6").sensitivity == "Low"
 
 
 def test_a_command_reaches_only_its_device(fp2):
@@ -1102,13 +1098,13 @@ def test_a_command_reaches_only_its_device(fp2):
 
 def test_the_hub_lists_the_devices_and_the_countries(fp2):
     app, world, _ = two(fp2)
-    hub = json.loads(mqtt_payload(world, "fp2companion/hub/attrs"))
+    hub = app.hub_attributes()
     # In serial order.
     assert [(d["key"], d["prefix"]) for d in hub["devices"]] == [
         (KEY, PREFIX), ("54ef44d4e5f6", "presence_sensor_fp2_e5f6")]
     assert ["GR", "Greece"] in hub["countries"]
     assert hub["signed_in"] is True
-    assert mqtt_payload(world, "fp2companion/hub/state") == "2"
+    assert len(app.devices) == 2
 
 
 def test_a_device_on_another_account_says_so_and_the_other_works(fp2):
@@ -1117,7 +1113,7 @@ def test_a_device_on_another_account_says_so_and_the_other_works(fp2):
                                           "You do not have permission")
     app, world = fp2(devices=[LIVING, OFFICE], clouds=clouds)
     app.start()
-    assert mqtt_payload(world, "fp2companion/54ef44d4e5f6/status/state") == \
+    assert dev(world, "54ef44d4e5f6").status == \
         "not_on_account"
     assert status(world) == "ok"
 
@@ -1127,7 +1123,7 @@ def test_a_lost_session_reaches_every_device(fp2):
     app.cloud_fake.fail = AqaraAuthError("res/write", 108, "expired")
     cmd(app, "refresh")
     assert status(world) == "no_session"
-    assert mqtt_payload(world, "fp2companion/54ef44d4e5f6/status/state") == \
+    assert dev(world, "54ef44d4e5f6").status == \
         "no_session"
 
 
@@ -1247,13 +1243,13 @@ def test_a_retry_that_fires_cancels_its_own_handle_silently(fp2):
     assert world.silent_cancels == [True]
 
 
-def test_a_token_refresh_republishes_the_hub(fp2):
+def test_a_token_refresh_updates_the_hub(fp2):
     app, world = fp2()
     app.start()
-    world.calls.clear()
+    world.changes.clear()
     app.cloud_fake.due = True
     app.token_check()
-    assert mqtt_payload(world, "fp2companion/hub/attrs") is not None
+    assert None in world.changes and KEY in world.changes
 
 
 # ----------------------------------------------------------------- live positions
@@ -1275,29 +1271,21 @@ def test_a_card_lease_reaches_the_tracker_per_device_and_tab(fp2):
     app, world = fp2(devices=[LIVING, OFFICE])
     app.start()
     app.tracker = FakeTracker()
-    cmd(app, "track", json.dumps({"client": "tab-1", "on": True}))
-    cmd(app, "track", json.dumps({"client": "tab-2", "on": True}),
-        device="54ef44d4e5f6")
-    cmd(app, "track", json.dumps({"client": "tab-1", "on": False}))
-    cmd(app, "track", "on")                     # no client: ignored
+    dev(world).track("tab-1", True)
+    dev(world, "54ef44d4e5f6").track("tab-2", True)
+    dev(world).track("tab-1", False)
+    dev(world).track("", True)                  # no client: ignored
     assert app.tracker.calls == [("lease", DID, "tab-1"),
                                  ("lease", OFFICE_DID, "tab-2"),
                                  ("release", DID, "tab-1")]
 
 
-def test_live_positions_are_published_unretained(fp2):
+def test_live_positions_go_to_the_device_that_sent_them(fp2):
     app, world = fp2()
     app.start()
-    before = len(world.calls)
-    app._live_pub(DID, {"state": "live", "targets": []})
-    app._live_pub("lumi1.unknown", {"state": "live"})
-    calls = world.calls[before:]
-    assert len(calls) == 1
-    service, _entity, data = calls[0]
-    assert service == "mqtt/publish"
-    assert data["retain"] is False and data["qos"] == 0
-    assert data["topic"] == f"{T}/live"
-    assert json.loads(data["payload"]) == {"state": "live", "targets": []}
+    app._live_out(DID, {"state": "live", "targets": []})
+    app._live_out("lumi1.unknown", {"state": "live"})
+    assert world.live == [(KEY, {"state": "live", "targets": []})]
 
 
 def test_terminate_shuts_the_tracker_down_once(fp2):

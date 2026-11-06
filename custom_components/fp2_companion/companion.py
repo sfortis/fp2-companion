@@ -2,13 +2,14 @@
 
 The FP2 reports presence locally over HomeKit and has no local configuration
 channel, so its settings go through the Aqara cloud app API (`aqara_cloud.py`).
-This app exposes them as MQTT discovery entities and feeds the zone card.
-Plan and every owner decision: docs/DESIGN.md
+The integration's entities read their state from the objects here, and the
+card's commands call their methods. Plan and every owner decision:
+docs/DESIGN.md
 
 It runs inside Home Assistant as the fp2_companion integration (decision 26).
-What Home Assistant provides, the log, timers, MQTT and the device registry,
-comes from a runtime (`runtime.py`) that subclasses `Fp2Companion`; the tests
-give it a fake one. The code here blocks on the cloud, so the runtime calls it
+What Home Assistant provides, the log, timers, the device registry and the
+entities, comes from a runtime (`runtime.py`) that subclasses `Fp2Companion`;
+the tests give it a fake one. The code here blocks on the cloud, so the runtime calls it
 on a worker thread of its own, one callback at a time.
 
 One app serves every FP2 (decision 17). It finds them in Home Assistant as
@@ -18,7 +19,7 @@ entity id prefix from the device's original name (which its HomeKit entity ids
 were built from), and the area from the device. A yaml list of serials covers
 an FP2 that is not paired over HomeKit. `Fp2Device` holds everything about one
 FP2; `Fp2Companion` holds what they share: the discovery, the one cloud
-session, the sign-in and the routing of commands.
+session and the sign-in.
 
 The app never polls the cloud. It reads at startup, after every write and when
 Refresh is pressed, which keeps the calls on the account to what a person
@@ -27,7 +28,6 @@ the live target positions, and only while a card holds a lease on them
 (`live_track.py`, owner's decision, 2026-10-31).
 """
 
-import json
 import os
 import re
 import threading
@@ -53,10 +53,9 @@ from .zone_model import (COLUMNS, ERR_BAD_REGION, ERR_EDGE_LOCKED,
                         zones_differ)
 
 # What the app keeps in the folder the runtime names in args["state_dir"]:
-# the one session, the zone backups and the zone selects published so far.
+# the one session and the zone backups.
 SESSION_NAME = "session.json"
 BACKUP_FOLDER = "backups"
-RUNTIME_NAME = "runtime.json"
 
 # What a zone write did, carried to its readback. Zones are matched by
 # rangeId and never by name (owner, 2026-10-30).
@@ -141,7 +140,7 @@ def parse_discovery(found, manual=(), exclude=()):
     """The devices to serve, from the discovery rows and the yaml.
 
     Each is {key, did, name, prefix, area}. The key is the serial in lower
-    case and names the device in MQTT topics. A row whose model is not an
+    case and names the device to the card. A row whose model is not an
     FP2 model or whose serial is not an FP2 serial is skipped, an excluded
     serial is dropped, and a manual serial already found is not added twice.
     """
@@ -184,68 +183,70 @@ def unknown_fp2_models(found):
 
 
 class Fp2Device:
-    """One FP2: its values, zones, backups, entities, topics and status.
+    """One FP2: its values, zones, backups, status and the commands on it.
 
-    Shared services (logging, timers, MQTT, the cloud lock, the clock) come
-    from the app, so a device never talks to Home Assistant by itself.
+    Shared services (logging, timers, the cloud lock, the clock) come from
+    the app, so a device never talks to Home Assistant by itself. After any
+    change it calls `_changed`, and the runtime updates its entities.
     """
 
     def __init__(self, app, info):
         self.app = app
         self.info = dict(info,
                          backup_dir=os.path.join(app.backup_root, info["did"]))
-        self.base = f"{app.base}/{info['key']}"
+        self.key = info["key"]
         self.cloud = app._make_cloud(info["did"])
         self.values = {}
         self.zones = []
+        self.preview = None
         self.last_read = None
         self.last_error = None
         self.learning_until = None
         self.status = STATUS_STARTING
         self.status_detail = None
 
-    def handle(self, key, payload):
-        """One command from this device's topic."""
-        if key == "refresh":
-            self.read_all(tags=True)
-        elif key == "sensitivity":
-            self._write_setting(RID_SENSITIVITY, SENSITIVITY_LABELS, payload)
-        elif key == "ai_detection":
-            self._write_value(RID_AI_MODE,
-                              "1" if payload.lower() in ("on", "1") else "0")
-        elif key == "ai_learning":
-            self._start_learning()
-        elif key == "approach_distance":
-            self._write_setting(RID_APPROACH_DISTANCE, APPROACH_LABELS, payload)
-        elif key.startswith("zone/") and key.endswith("/sensitivity"):
-            self._zone_sensitivity(key[len("zone/"):-len("/sensitivity")],
-                                   payload)
-        elif key == "zone_set":
-            self._zone_set(payload)
-        elif key == "zone_delete":
-            self._zone_delete(payload)
-        elif key == "restore":
-            self._restore(payload)
-        elif key == "preview":
-            self._preview(payload)
-        elif key == "track":
-            self._track(payload)
-        else:
-            self.app.log(f"unknown command {key!r}", level="WARNING")
+    # ------------------------------------------------------------ commands
+    # The entities and the card call these on the app's worker thread.
 
-    def _track(self, payload):
-        """A card's lease on the live positions: `{"client": id, "on": bool}`.
-        Each browser tab is its own client, so one tab that closes does not
-        stop the dots in another tab watching the same FP2."""
-        try:
-            request = json.loads(payload)
-        except ValueError:
-            request = None
-        if not isinstance(request, dict) or not request.get("client"):
-            self.app.log("track needs {client, on}", level="WARNING")
+    def refresh(self, kwargs=None):
+        """Read the settings, the zones and the zone types again."""
+        self.read_all(tags=True)
+
+    def set_sensitivity(self, label):
+        self._write_setting(RID_SENSITIVITY, SENSITIVITY_LABELS, label)
+
+    def set_approach_distance(self, label):
+        self._write_setting(RID_APPROACH_DISTANCE, APPROACH_LABELS, label)
+
+    def set_ai_detection(self, on):
+        self._write_value(RID_AI_MODE, "1" if on else "0")
+
+    def start_ai_learning(self):
+        self._start_learning()
+
+    def set_zone_sensitivity(self, range_id, label):
+        self._zone_sensitivity(range_id, label)
+
+    def zone_set(self, request):
+        self._zone_set(request)
+
+    def zone_delete(self, range_id):
+        self._zone_delete(range_id)
+
+    def restore(self, name):
+        self._restore(name)
+
+    def show_preview(self, name):
+        self._preview(name)
+
+    def track(self, client, on):
+        """A card's lease on the live positions. Each browser tab is its own
+        client, so one tab that closes does not stop the dots in another tab
+        watching the same FP2."""
+        client = str(client or "")[:64]
+        if not client or self.app.tracker is None:
             return
-        client = str(request["client"])[:64]
-        if request.get("on", True):
+        if on:
             self.app.tracker.lease(self.info["did"], client)
         else:
             self.app.tracker.release(self.info["did"], client)
@@ -275,9 +276,6 @@ class Fp2Device:
         self.zones = zones
         self.last_read = self.app._now()
         self._backup_if_changed(zones)
-        self._publish_zone_selects()
-        self._publish_values()
-        self._publish_zones()
         self._set_status(STATUS_OK)
         return True
 
@@ -349,7 +347,7 @@ class Fp2Device:
 
     def _start_learning(self):
         """Send what the Aqara app sends to start AI learning. Nothing on
-        the cloud reports progress or the end, so the app publishes when the
+        the cloud reports progress or the end, so the app shows when the
         run should end and the card counts down to it."""
         with self.app.lock:
             try:
@@ -359,7 +357,7 @@ class Fp2Device:
                 return
         self.learning_until = self.app._now() + AI_LEARNING_SECONDS
         self.app.log("AI learning started")
-        self._publish_status()
+        self._changed()
         # The end belongs to this run: a second press restarts the count, and
         # the first run's timer must not end the second one early.
         self.app.run_in(self._learning_done, AI_LEARNING_SECONDS,
@@ -369,34 +367,30 @@ class Fp2Device:
         if (kwargs or {}).get("until") != self.learning_until:
             return
         self.learning_until = None
-        self._publish_status()
+        self._changed()
 
     # ------------------------------------------------------------- zones
     #
     # Every zone write follows the same four steps. The zone list is read
-    # fresh from the cloud rather than taken from the last publish, because
+    # fresh from the cloud rather than taken from the last read, because
     # the Aqara app may have changed it since. A backup of that list is
     # written before anything is sent. The write goes out. A readback a few
     # seconds later decides whether it landed, by rangeId.
 
-    def _zone_sensitivity(self, rid_text, label):
+    def _zone_sensitivity(self, range_id, label):
         value = next((int(v) for v, text in SENSITIVITY_LABELS.items()
                       if text == label), None)
-        if value is None or not rid_text.isdigit():
-            self._refuse(f"zone sensitivity {label!r} for {rid_text!r}")
+        if value is None or not _is_range_id(range_id):
+            self._refuse(f"zone sensitivity {label!r} for {range_id!r}")
             return
-        self._zone_write(KIND_EDIT, {"rangeId": int(rid_text),
+        self._zone_write(KIND_EDIT, {"rangeId": int(range_id),
                                      "sensitivity": value})
 
-    def _zone_set(self, payload):
+    def _zone_set(self, request):
         """A zone from the card: with a rangeId it is an edit, without one a
         create. Only name, blocks, sensitivity and the type's tagId are taken
         from the card; everything else, the type's name included, comes from
         the zone as the cloud holds it or from the tag catalogue."""
-        try:
-            request = json.loads(payload)
-        except ValueError:
-            request = None
         if not isinstance(request, dict):
             self._refuse("zone_set needs a JSON object")
             return
@@ -500,11 +494,11 @@ class Fp2Device:
                                            "is in the interference zone")
         return zone
 
-    def _zone_delete(self, payload):
-        if not payload.isdigit():
-            self._refuse(f"zone_delete needs a rangeId, got {payload!r}")
+    def _zone_delete(self, range_id):
+        if not _is_range_id(range_id):
+            self._refuse(f"zone_delete needs a rangeId, got {range_id!r}")
             return
-        rid = int(payload)
+        rid = int(range_id)
         with self.app.lock:
             try:
                 before = self.cloud.list_zones()
@@ -604,7 +598,7 @@ class Fp2Device:
                     before=before)
 
     def _preview(self, name):
-        """Publish one backup's zones so the card can draw them before a
+        """Show one backup's zones so the card can draw them before a
         restore. A sensor of its own, because the zones of every backup
         together would pass the 16 KB Home Assistant keeps per entity."""
         try:
@@ -612,10 +606,9 @@ class Fp2Device:
         except (OSError, ValueError) as exc:
             self._refuse(f"backup {name!r}: {exc}")
             return
-        self._pub(f"{self.base}/preview/state", name)
-        self._pub(f"{self.base}/preview/attrs", {
-            "name": name, "saved_at": body.get("saved_at"),
-            "reason": body.get("reason"), "zones": body["zones"]})
+        self.preview = {"name": name, "saved_at": body.get("saved_at"),
+                        "reason": body.get("reason"), "zones": body["zones"]}
+        self._changed()
 
     def _verify_zone(self, kwargs):
         if not self.read_all():
@@ -645,9 +638,9 @@ class Fp2Device:
 
     def _refuse(self, reason, code=None):
         self.app.log(f"refused: {reason}", level="WARNING")
-        # Republished so a select in Home Assistant goes back to the value the
-        # device holds instead of showing the one that was refused.
-        self._publish_values()
+        # The entities are written again with the status, so a select in
+        # Home Assistant goes back to the value the device holds instead of
+        # showing the one that was refused.
         self._set_status(STATUS_REFUSED, {"code": code, "reason": reason})
 
     def _cloud_failed(self, exc):
@@ -660,18 +653,48 @@ class Fp2Device:
         else:
             self._set_status(STATUS_CLOUD_ERROR)
 
-    # ------------------------------------------------------------- publishing
-    def _pub(self, topic, payload):
-        self.app._pub(topic, payload)
+    # ------------------------------------------------------------- state
+    # What the entities show. They read it on Home Assistant's event loop
+    # after `_changed`; every value here is replaced whole, never mutated in
+    # place, so a read never sees half of an update.
+
+    def _changed(self):
+        self.app.changed(self.key)
 
     def _set_status(self, code, detail=None):
         self.status = code
         self.status_detail = detail
-        self._publish_status()
+        self._changed()
 
-    def _publish_status(self):
-        self._pub(f"{self.base}/status/state", self.status)
-        self._pub(f"{self.base}/status/attrs", {
+    @property
+    def sensitivity(self):
+        """The sensitivity as its label, or None before the first read."""
+        return SENSITIVITY_LABELS.get(self.values.get(RID_SENSITIVITY))
+
+    @property
+    def approach_distance(self):
+        return APPROACH_LABELS.get(self.values.get(RID_APPROACH_DISTANCE))
+
+    @property
+    def ai_detection(self):
+        """True or False, or None before the first read."""
+        ai = self.values.get(RID_AI_MODE)
+        return {"1": True, "0": False}.get(ai)
+
+    def zone_sensitivity(self, range_id):
+        zone = next((z for z in self.zones
+                     if z.get("rangeId") == range_id), None)
+        if zone is None:
+            return None
+        return SENSITIVITY_LABELS.get(str(zone.get("sensitivity")))
+
+    def detection_zones(self):
+        return [z for z in self.zones
+                if z.get("regionType") == REGION_DETECTION
+                and z.get("rangeId") is not None]
+
+    def status_attributes(self):
+        return {
             "message": STATUS_TEXT[self.status],
             "detail": self.status_detail,
             "did": self.info["did"],
@@ -683,28 +706,10 @@ class Fp2Device:
             "last_read": _iso(self.last_read),
             "last_error": self.last_error,
             "learning_until": _iso(self.learning_until),
-        })
+        }
 
-    def _publish_values(self):
-        b = self.base
-        sens = SENSITIVITY_LABELS.get(self.values.get(RID_SENSITIVITY))
-        dist = APPROACH_LABELS.get(self.values.get(RID_APPROACH_DISTANCE))
-        if sens:
-            self._pub(f"{b}/state/sensitivity", sens)
-        if dist:
-            self._pub(f"{b}/state/approach_distance", dist)
-        ai = self.values.get(RID_AI_MODE)
-        if ai in ("0", "1"):
-            self._pub(f"{b}/state/ai_detection", "on" if ai == "1" else "off")
-        for zone in self._detection_zones():
-            label = SENSITIVITY_LABELS.get(str(zone.get("sensitivity")))
-            if label:
-                self._pub(f"{b}/state/zone/{zone['rangeId']}/sensitivity",
-                          label)
-
-    def _publish_zones(self):
-        self._pub(f"{self.base}/zones/state", str(len(self.zones)))
-        self._pub(f"{self.base}/zones/attrs", {
+    def zones_attributes(self):
+        return {
             "did": self.info["did"],
             "grid": {"columns": COLUMNS, "rows": ROWS},
             # Where the FP2 itself sits on the grid, the point x=0, y=0 of the
@@ -715,111 +720,16 @@ class Fp2Device:
             "tags": self.app.zone_tags,
             "backups": list_backups(self.info["backup_dir"])[:BACKUPS_SHOWN],
             "last_read": _iso(self.last_read),
-        })
+        }
 
-    def _detection_zones(self):
-        return [z for z in self.zones
-                if z.get("regionType") == REGION_DETECTION
-                and z.get("rangeId") is not None]
 
-    # ------------------------------------------------------------- discovery
-    def _device_block(self):
-        d = self.info
-        block = {"identifiers": [f"fp2_companion_{d['did']}"],
-                 "name": f"{d['name']} Settings",
-                 "manufacturer": "FP2 Companion", "model": "fp2_companion"}
-        if d.get("area"):
-            block["suggested_area"] = d["area"]
-        return block
-
-    def _disc(self, component, key, cfg, entity_key=None):
-        """`default_entity_id` pins the id to the HomeKit device's prefix, so
-        the entities read as belonging to that FP2 without a registry rename.
-        It only acts when an entity is created. `entity_key` replaces `key` in
-        the entity id only; the unique id always uses `key`."""
-        d = self.info
-        object_id = f"fp2_companion_{d['did'].replace('.', '_')}_{key}"
-        cfg["unique_id"] = object_id
-        cfg["object_id"] = object_id
-        cfg["default_entity_id"] = \
-            f"{component}.{d['prefix']}_{entity_key or key}"
-        cfg["device"] = self._device_block()
-        self._pub(f"{self.app.disc}/{component}/{object_id}/config", cfg)
-        return object_id
-
-    def _publish_discovery(self):
-        b = self.base
-        self._disc("select", "sensitivity", {
-            "name": "Sensitivity",
-            "command_topic": f"{b}/cmd/sensitivity",
-            "state_topic": f"{b}/state/sensitivity",
-            "options": list(SENSITIVITY_LABELS.values()),
-            "icon": "mdi:motion-sensor", "entity_category": "config"})
-        self._disc("select", "approach_distance", {
-            "name": "Approach Distance",
-            "command_topic": f"{b}/cmd/approach_distance",
-            "state_topic": f"{b}/state/approach_distance",
-            "options": list(APPROACH_LABELS.values()),
-            "icon": "mdi:arrow-collapse-horizontal",
-            "entity_category": "config"})
-        self._disc("switch", "ai_detection", {
-            "name": "AI Person Detection",
-            "command_topic": f"{b}/cmd/ai_detection",
-            "state_topic": f"{b}/state/ai_detection",
-            "payload_on": "on", "payload_off": "off",
-            "icon": "mdi:account-search", "entity_category": "config"})
-        self._disc("button", "ai_learning", {
-            "name": "AI Learning", "command_topic": f"{b}/cmd/ai_learning",
-            "payload_press": "PRESS", "icon": "mdi:school"})
-        self._disc("button", "refresh", {
-            "name": "Refresh", "command_topic": f"{b}/cmd/refresh",
-            "payload_press": "PRESS", "icon": "mdi:cloud-refresh"})
-        self._disc("sensor", "zones", {
-            "name": "Zones", "state_topic": f"{b}/zones/state",
-            "json_attributes_topic": f"{b}/zones/attrs",
-            "icon": "mdi:floor-plan"})
-        self._disc("sensor", "backup_preview", {
-            "name": "Backup Preview", "state_topic": f"{b}/preview/state",
-            "json_attributes_topic": f"{b}/preview/attrs",
-            "icon": "mdi:file-restore", "entity_category": "diagnostic"})
-        self._disc("sensor", "cloud_status", {
-            "name": "Cloud Status", "state_topic": f"{b}/status/state",
-            "json_attributes_topic": f"{b}/status/attrs",
-            "icon": "mdi:cloud-check", "entity_category": "diagnostic"})
-
-    def _publish_zone_selects(self):
-        """One select per detection zone, keyed by its rangeId.
-
-        The key is the rangeId and not the name, so renaming a zone in the
-        Aqara app keeps the same entity. A zone that has gone is removed with
-        an empty retained config, and the set of published zones is kept on
-        disk so that a zone deleted while the app was down is removed too.
-        """
-        b = self.base
-        published = set()
-        for zone in self._detection_zones():
-            rid = zone["rangeId"]
-            slug = slugify(zone.get("name")) or f"zone_{rid}"
-            cfg = {"name": f"{zone.get('name')} Sensitivity",
-                   "command_topic": f"{b}/cmd/zone/{rid}/sensitivity",
-                   "state_topic": f"{b}/state/zone/{rid}/sensitivity",
-                   "options": list(SENSITIVITY_LABELS.values()),
-                   "icon": "mdi:vector-square", "entity_category": "config"}
-            # The entity id carries the zone NAME, which reads better than the
-            # rangeId; the unique id keeps the rangeId.
-            published.add(self._disc("select", f"zone_{rid}_sensitivity", cfg,
-                                     entity_key=f"{slug}_sensitivity"))
-        # One list for every device; a device retires only its own selects,
-        # which are the object ids that carry its device id.
-        mine = f"fp2_companion_{self.info['did'].replace('.', '_')}_"
-        runtime = _load_json(self.app.runtime_file)
-        known = set(runtime.get("zone_selects", []))
-        for object_id in {o for o in known if o.startswith(mine)} - published:
-            self._pub(f"{self.app.disc}/select/{object_id}/config", "")
-            self.app.log(f"zone select {object_id} retired")
-        runtime["zone_selects"] = sorted(
-            {o for o in known if not o.startswith(mine)} | published)
-        _save_json(self.app.runtime_file, runtime)
+def _is_range_id(value):
+    """A zone's rangeId, as an int or as digits."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    return isinstance(value, str) and value.isdigit()
 
 
 class Fp2Companion:
@@ -828,9 +738,11 @@ class Fp2Companion:
     Home Assistant's side comes from the runtime, a subclass that provides
     `args` (the options), `log(text, level)`, `run_in(callback, seconds,
     **kwargs)`, `run_daily(callback, "HH:MM:SS")`, `cancel_timer(handle,
-    silent)`, `publish(topic, payload, retain, qos)`, `subscribe(topics,
-    callback)` and `find_devices()`. A timer's callback receives its keyword
-    arguments as one dict, as it did under AppDaemon, where this class began.
+    silent)`, `find_devices()`, `added(device)` when a device is first
+    served, `changed(key)` after a device's state changed (None for the app's
+    own state) and `live(key, message)` for one live position message. A
+    timer's callback receives its keyword arguments as one dict, as it did
+    under AppDaemon, where this class began.
     """
 
     def initialize(self):
@@ -838,9 +750,6 @@ class Fp2Companion:
         state_dir = a["state_dir"]
         self.session_file = os.path.join(state_dir, SESSION_NAME)
         self.backup_root = os.path.join(state_dir, BACKUP_FOLDER)
-        self.runtime_file = os.path.join(state_dir, RUNTIME_NAME)
-        self.base = a.get("base_topic", "fp2companion")
-        self.disc = a.get("discovery_prefix", "homeassistant")
         self.backups_keep = int(a.get("backups_keep", 50))
         # Optional: every region has a built-in identity (regions.py).
         self._app_id = a.get("app_id")
@@ -869,9 +778,6 @@ class Fp2Companion:
         self.session = self._make_cloud("")
         self.tracker = self._make_tracker()
 
-        # The app's commands and every device's (`_on_cmd`).
-        self.subscribe([f"{self.base}/cmd/#", f"{self.base}/+/cmd/#"],
-                       self._on_cmd)
         self.run_in(self._check_old_card, 1)
         self.run_daily(self.token_check, a.get("token_check_time", "04:10:00"))
         self.run_in(self.start, 5)
@@ -895,7 +801,7 @@ class Fp2Companion:
 
     def _make_tracker(self):
         # A lambda, so the tests' replacement of _make_cloud applies.
-        return LiveTracker(lambda did: self._make_cloud(did), self._live_pub,
+        return LiveTracker(lambda did: self._make_cloud(did), self._live_out,
                            self.lock, log=self.log)
 
     def terminate(self):
@@ -919,7 +825,7 @@ class Fp2Companion:
             self._retry = None
         known = set(self.devices)
         found = self.discover()
-        self._publish_hub()
+        self.changed(None)
         if not found:
             self.log("no FP2 found in Home Assistant yet; trying again later",
                      level="WARNING")
@@ -957,7 +863,7 @@ class Fp2Companion:
             if info["key"] not in self.devices:
                 device = Fp2Device(self, info)
                 self.devices[info["key"]] = device
-                device._publish_discovery()
+                self.added(device)
                 self.log(f"serving {info['name']} ({info['did']})")
         return list(self.devices.values())
 
@@ -978,15 +884,15 @@ class Fp2Companion:
                 self.log(f"token check failed: {exc}", level="WARNING")
                 return
         for device in self.devices.values():
-            device._publish_status()
+            device._changed()
         # The hub carries the expiry too, and a refresh just moved it.
-        self._publish_hub()
+        self.changed(None)
 
     def session_lost(self):
         for device in self.devices.values():
             device.values = {}
             device._set_status(STATUS_NO_SESSION)
-        self._publish_hub()
+        self.changed(None)
 
     def session_info(self):
         """The shared session, from ONE read of the file: every device's
@@ -998,17 +904,13 @@ class Fp2Companion:
                 "country": session.get("country"),
                 "token_expires": _iso(jwt_exp(token)) if token else None}
 
-    def _login(self, payload):
-        """Sign in from the card (decisions 15, 16 and 19). The payload carries
-        the account, the country and the password already encrypted in the
-        browser; neither the account nor the block is logged, and only the
-        token is kept."""
-        try:
-            request = json.loads(payload)
-        except ValueError:
-            request = None
+    def login(self, request):
+        """Sign in from the card (decisions 15, 16 and 19). The request
+        carries the account, the country and the password already encrypted
+        in the browser; neither the account nor the block is logged, and only
+        the token is kept."""
         if not isinstance(request, dict):
-            self._refuse_all("login needs a JSON object")
+            self._refuse_all("login needs an object")
             return
         account = str(request.get("account") or "")
         with self.lock:
@@ -1032,12 +934,12 @@ class Fp2Companion:
                                         "reason": exc.message})
                 return
         self.log(f"signed in as {mask_account(account)}")
-        self._publish_hub()
+        self.changed(None)
         for device in self.devices.values():
             device.last_error = None
             device.read_all()
 
-    def _logout(self):
+    def logout(self):
         with self.lock:
             self.session.logout()
         self.log("signed out; the PhoneId is kept for the next sign-in")
@@ -1047,71 +949,27 @@ class Fp2Companion:
         for device in self.devices.values():
             device._refuse(reason)
 
-    # ------------------------------------------------------------- commands
-    def _on_cmd(self, topic, payload):
-        """`<base>/cmd/<command>` is for the app, `<base>/<key>/cmd/<command>`
-        for one device. The subscription covers only those, and the prefix
-        test stays as a guard."""
-        topic = topic or ""
-        if not topic.startswith(f"{self.base}/"):
-            return
-        rest = topic[len(self.base) + 1:]
-        payload = str(payload or "").strip()
-        if rest.startswith("cmd/"):
-            key = rest[len("cmd/"):]
-            if key == "login":
-                self._login(payload)
-            elif key == "logout":
-                self._logout()
-            elif key == "rescan":
-                self.start()
-            else:
-                self.log(f"unknown command {key!r}", level="WARNING")
-            return
-        dkey, _, sub = rest.partition("/")
-        device = self.devices.get(dkey)
-        if device is None or not sub.startswith("cmd/"):
-            return
-        device.handle(sub[len("cmd/"):], payload)
+    def rescan(self):
+        self.start()
 
     # ------------------------------------------------------------- hub
-    def _publish_hub(self):
-        """One sensor for the app itself: the devices for the card's
-        dropdown, the countries for its sign-in form, and the session."""
-        object_id = "fp2_companion_devices"
-        self._pub(f"{self.disc}/sensor/{object_id}/config", {
-            "name": "Devices", "unique_id": object_id, "object_id": object_id,
-            "default_entity_id": "sensor.fp2_companion_devices",
-            "state_topic": f"{self.base}/hub/state",
-            "json_attributes_topic": f"{self.base}/hub/attrs",
-            "icon": "mdi:radar",
-            "device": {"identifiers": ["fp2_companion"], "name": "FP2 Companion",
-                       "manufacturer": "FP2 Companion",
-                       "model": "fp2_companion"}})
+    def hub_attributes(self):
+        """What the app itself shows: the devices for the card's dropdown,
+        the countries for its sign-in form, and the session."""
         devices = [{k: d.info[k] for k in ("key", "did", "name", "prefix",
                                             "area")}
                    for d in self.devices.values()]
-        self._pub(f"{self.base}/hub/state", str(len(devices)))
-        self._pub(f"{self.base}/hub/attrs", {
-            "devices": devices,
-            "countries": [[code, name] for code, name, _a in COUNTRIES],
-            **self.session_info()})
+        return {"devices": devices,
+                "countries": [[code, name] for code, name, _a in COUNTRIES],
+                **self.session_info()}
 
-    def _pub(self, topic, payload):
-        text = payload if isinstance(payload, str) else json.dumps(payload)
-        self.publish(topic, text, retain=True)
-
-    def _live_pub(self, did, message):
-        """One live message, from the tracker's publish thread. It is not
-        retained, because a retained position would be stale on arrival. It
-        goes to the broker through Home Assistant's MQTT client directly,
-        not through the mqtt.publish action, so it is no event row."""
+    def _live_out(self, did, message):
+        """One live message, from the tracker's publish thread. It goes to
+        the cards that watch this device and is never stored."""
         device = next((d for d in self.devices.values()
                        if d.info["did"] == did), None)
-        if device is None:
-            return
-        self.publish(f"{device.base}/live", json.dumps(message), retain=False,
-                     qos=0)
+        if device is not None:
+            self.live(device.key, message)
 
 
 def mask_account(account):
@@ -1128,19 +986,3 @@ def _iso(epoch):
     if epoch is None:
         return None
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(epoch))
-
-
-def _load_json(path):
-    try:
-        with open(path) as fh:
-            return json.load(fh)
-    except (FileNotFoundError, ValueError):
-        return {}
-
-
-def _save_json(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as fh:
-        json.dump(obj, fh)
-    os.replace(tmp, path)
