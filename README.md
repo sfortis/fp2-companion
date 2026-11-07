@@ -220,6 +220,12 @@ needed after that.
   that names one of the old devices has to be picked again.
 - The card must be version 2.0.0 or later, because it now talks to the
   integration over Home Assistant's websocket instead of MQTT.
+- Versions up to 1.3.1 copied the card into `www/fp2-companion/` and added
+  a dashboard resource for it. If that resource is still there, the
+  dashboard loads the old copy next to the card from HACS. In **Settings >
+  Dashboards**, open **Resources** from the menu at the top right, delete
+  the resource that starts with `/local/fp2-companion/`, and delete the
+  folder `www/fp2-companion/`.
 - Sign in once more when the integration asks for it.
 
 From the AppDaemon app, stop the app first: stop AppDaemon, or remove the
