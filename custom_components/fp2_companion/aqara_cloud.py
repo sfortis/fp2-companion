@@ -491,6 +491,13 @@ class AqaraCloud:
         `uniqueKey` that `view_subscribe` needs."""
         session = self._session()
         headers = self._headers(session, session["token"], "")
+        if session.get("area") == "CN":
+            # CN refuses the handshake signed with an empty payload part (106)
+            # and accepts it with that part left out (2026-11-20).
+            appid, appkey = self._pair(session)
+            headers["Sign"] = hashlib.md5(
+                f"Appid={appid}&Nonce={headers['Nonce']}&Time={headers['Time']}"
+                f"&Token={session['token']}&{appkey}".encode()).hexdigest()
         headers.pop("UserId", None)
         headers.pop("Content-Type", None)
         url = self._base(session).replace("https://", "wss://", 1)

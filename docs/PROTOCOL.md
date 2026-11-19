@@ -210,6 +210,9 @@ it pushes anything.
 
 1. Open `wss://<host>/app/v1.0/lumi/push/ws/aqarahome` with the same signed
    headers as an HTTP call, signed over an empty payload, without `UserId`.
+   The CN servers refuse that signature with code 106 (the handshake answers
+   HTTP 200 with the error as JSON) and accept it with the empty payload part
+   left out: `Appid=…&Nonce=…&Time=…&Token=…&<appkey>`.
 2. The first message is `{"success": true, "uniqueKey": "..."}`.
 3. `POST app/view/subscribe` with
    `{"subjectId": "<did>", "viewId": "control", "version": "1.8"}` and the

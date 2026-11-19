@@ -500,6 +500,19 @@ def test_the_push_socket_is_signed_over_nothing_and_sends_no_user_id(store):
     assert "UserId" not in headers and "Content-Type" not in headers
 
 
+def test_a_cn_push_socket_is_signed_without_the_empty_payload_part(store):
+    session = store.load()
+    session["area"] = "CN"
+    store.save(session)
+    _, headers = client(store, FakeTransport()).push_socket()
+    want = hashlib.md5("&".join([
+        f"Appid={APPID}", f"Nonce={headers['Nonce']}",
+        f"Time={headers['Time']}", f"Token={TOKEN_1}", APPKEY,
+    ]).encode()).hexdigest()
+    assert headers["Sign"] == want
+    assert "UserId" not in headers and "Content-Type" not in headers
+
+
 def test_the_push_socket_follows_the_session_host(store):
     session = store.load()
     session["host"] = "https://aiot-rpc-usa.aqara.com"
